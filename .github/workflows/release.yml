@@ -1,0 +1,62 @@
+# 浏览器扩展 Release workflow
+# 依据 https://tpscsm-docs.pages.dev/developer/workflow-example#浏览器扩展项目示例
+#
+# 产物：fb-comment-dm-manager-<tag>.zip
+# 解压后根目录即为 manifest.json，供 Chrome「加载已解压的扩展程序」使用。
+#
+# L2 Attestation 约束：
+# 1. 仅由 tag push 触发（v*），不用 release.published / workflow_dispatch
+# 2. 使用默认 GITHUB_TOKEN 上传 Release（uploader 必须是 github-actions[bot]）
+# 3. 用 softprops/action-gh-release 上传 zip，禁止手工拖拽
+# 4. attest-build-provenance 的 subject-path 指向最终 zip
+
+name: Release Browser Extension
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: write
+      attestations: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 本扩展为原生 Manifest V3 源码，无 npm 构建。
+      # 按文档要求把可加载文件输出到 dist/，且 dist 根必须含 manifest.json。
+      - name: Build
+        run: |
+          mkdir -p dist
+          rsync -a \
+            --exclude '.git/' \
+            --exclude '.github/' \
+            --exclude 'dist/' \
+            --exclude '*.zip' \
+            --exclude '.gitignore' \
+            ./ dist/
+          test -f dist/manifest.json
+
+      # 打包：解压后根就是 manifest.json，不是 dist/manifest.json
+      - name: Package Extension
+        run: |
+          cd dist
+          zip -r "../fb-comment-dm-manager-${{ github.ref_name }}.zip" .
+          unzip -l "../fb-comment-dm-manager-${{ github.ref_name }}.zip" | grep -q 'manifest.json'
+
+      - name: Attest Build Provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: '*.zip'
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: '*.zip'
+          generate_release_notes: true
