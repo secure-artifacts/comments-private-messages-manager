@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-appearance="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FB 评论私信管家</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <header class="header">
+      <div class="logo-area">
+        <img src="../assets/icon128.png" alt="Logo" class="logo-img">
+        <div class="title-group">
+          <h1>FB 评论私信管家</h1>
+          <span class="version-tag">Comments Pro v1.0.0</span>
+        </div>
+      </div>
+      <div class="status-badge" id="statusBadge">
+        <span class="status-dot"></span>
+        <span id="statusText">就绪</span>
+      </div>
+    </header>
+
+    <div class="identity-notice">
+      <span class="notice-icon">💬</span>
+      <span class="notice-text">启动后固定打开 1 个 <b>Facebook 专业面板 → 评论管理工具</b> 工作页；当前私信确认并记录完成后才处理下一条。</span>
+    </div>
+
+    <div class="emergency-alert" id="emergencyAlert" style="display:none;">
+      <div class="alert-title">🚨 触发风控熔断警告</div>
+      <div class="alert-desc" id="emergencyDesc"></div>
+      <button class="btn-reset-brake" id="btnResetBrake">验证已处理，解除熔断</button>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card"><span class="stat-value" id="statSeen">0</span><span class="stat-label">发现评论</span></div>
+      <div class="stat-card"><span class="stat-value highlight-blue" id="statDm">0</span><span class="stat-label">成功私信</span></div>
+      <div class="stat-card"><span class="stat-value highlight-purple" id="statSkipped">0</span><span class="stat-label">冷却跳过</span></div>
+      <div class="stat-card"><span class="stat-value highlight-red" id="statErrors">0</span><span class="stat-label">异常</span></div>
+      <div class="stat-card"><span class="stat-value" id="statWorkers">0/1</span><span class="stat-label">工作页</span></div>
+    </div>
+
+    <div class="status-box">
+      <div class="status-box-header"><span>当前运行动态</span><span class="pulse-icon">●</span></div>
+      <div class="status-box-content" id="liveStatusContent">等待任务启动...</div>
+    </div>
+
+    <div class="refresh-box">
+      <div class="refresh-box-left">
+        <span class="refresh-box-label">页面定时刷新</span>
+        <span class="refresh-box-sub" id="popupRefreshInterval">周期 5 分钟</span>
+      </div>
+      <div class="refresh-countdown" id="popupRefreshCountdown">--:--</div>
+    </div>
+
+    <div class="control-actions">
+      <button class="btn btn-primary" id="btnStart"><span>▶</span><span>启动评论管理工具</span></button>
+      <button class="btn btn-warning" id="btnPause" disabled><span>⏸</span><span>暂停任务</span></button>
+      <button class="btn btn-danger" id="btnStop" disabled><span>⏹</span><span>终止运行</span></button>
+    </div>
+
+    <div class="control-actions">
+      <button class="btn btn-secondary-wide" id="btnOpenInbox"><span>💬</span><span>打开评论管理工具</span></button>
+    </div>
+
+    <footer class="footer">
+      <button class="btn-dashboard btn-appearance-popup" id="btnAppearanceMode">☀️ 界面：<span id="appearanceButtonText">亮色</span></button>
+      <button class="btn-dashboard btn-theme-popup" id="btnThemeColor">🎨 主题色：<span id="themeButtonText">蓝青</span></button>
+      <button class="btn-dashboard" id="btnOpenDashboard">⚙️ 打开完整管理控制台</button>
+    </footer>
+  </div>
+
+  <script src="../utils/storage.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "FB 评论私信管家 - 评论管理工具版",
+  "short_name": "FB 评论私信管家",
+  "version": "1.0.0",
+  "description": "Facebook 评论管理工具单工作页私信助手：最新评论优先，支持评论去重、用户冷却、反向关键词、失败重试、可调定时刷新、主题色切换、亮暗模式切换、完整历史备份与 Messenger 私信发送。",
+  "icons": {
+    "16": "assets/icon16.png",
+    "48": "assets/icon48.png",
+    "128": "assets/icon128.png"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": "assets/icon48.png",
+    "default_title": "FB 评论私信管家 v2.12.1"
+  },
+  "permissions": [
+    "storage",
+    "alarms",
+    "notifications"
+  ],
+  "host_permissions": [
+    "https://*.facebook.com/professional_dashboard/*",
+    "https://facebook.com/professional_dashboard/*"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  },
+  "background": {
+    "service_worker": "background/service_worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.facebook.com/professional_dashboard/*",
+        "https://facebook.com/professional_dashboard/*"
+      ],
+      "js": [
+        "utils/storage.js",
+        "content/comments_manager_scrub.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "dashboard/dashboard.html"
+}

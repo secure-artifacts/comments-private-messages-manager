@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-appearance="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FB 评论私信管家 - 评论管理工具版</title>
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <div class="app-layout">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <img src="../assets/icon128.png" alt="Logo" class="sidebar-logo">
+        <div class="sidebar-title">
+          <h2>FB 评论私信管家</h2>
+          <span>Comments Pro v1.0.0</span>
+        </div>
+      </div>
+
+      <nav class="nav-menu">
+        <button class="nav-item active" data-tab="tab-monitor"><span class="nav-icon">💬</span><span>评论管理工具监控</span></button>
+        <button class="nav-item" data-tab="tab-rules"><span class="nav-icon">⚡</span><span>反向关键词与私信</span></button>
+        <button class="nav-item" data-tab="tab-strategy"><span class="nav-icon">🛡️</span><span>优先级与去重策略</span></button>
+        <button class="nav-item" data-tab="tab-logs"><span class="nav-icon">📊</span><span>运行日志与导出</span></button>
+        <button class="nav-item" data-tab="tab-backup"><span class="nav-icon">💾</span><span>配置导入与备份</span></button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="status-summary">
+          <span class="status-indicator-dot" id="sideStatusDot"></span>
+          <span id="sideStatusText">系统就绪</span>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <header class="top-bar">
+        <div class="top-title-group">
+          <div class="top-title" id="pageTitle">Facebook 评论管理工具监控</div>
+          <div class="live-status-pill idle" id="topStatusPill">
+            <span class="pill-dot"></span>
+            <span id="topStatusPillText">系统就绪</span>
+          </div>
+        </div>
+        <div class="top-actions">
+          <button class="btn-top btn-appearance" id="btnAppearanceMode" title="亮色 / 暗色模式切换">☀️ <span id="appearanceButtonText">亮色</span></button>
+          <button class="btn-top btn-theme" id="btnThemeColor" title="点击切换控制台主题色">🎨 <span id="themeButtonText">蓝青</span></button>
+          <button class="btn-top btn-top-start idle" id="topBtnStart"><span>▶</span><span id="topBtnStartText">启动任务</span></button>
+          <button class="btn-top btn-top-stop" id="topBtnStop" disabled><span>⏹</span><span>停止任务</span></button>
+        </div>
+      </header>
+
+      <div class="content-body">
+        <section class="tab-panel active" id="tab-monitor">
+          <div class="card">
+            <div class="card-header">
+              <h3>💬 Facebook 专业面板 · 评论管理工具</h3>
+              <p class="subtitle">不再手动添加贴文。点击启动后，插件固定只打开 1 个 Facebook「评论管理工具」工作标签页。页面会自动把筛选切到“所有评论”，只处理最近7天；从顶部最新评论开始，点击评论行“发消息”弹出 Messenger 私信框。确认发送成功后先记录去重，再继续下一条；页面刷新周期可在“优先级与去重策略”中按分钟调整。</p>
+            </div>
+            <div class="monitor-hero">
+              <div>
+                <div class="monitor-mode-title">当前模式：最新评论优先</div>
+                <div class="monitor-mode-desc">评论管理工具里的普通贴文、图片、视频、Reels 评论统一处理。插件固定使用 1 个工作标签页严格串行发送；成功后先写入评论去重和用户冷却记录，再继续下一条。固定处理窗口：最近7天。</div>
+              </div>
+              <button class="btn btn-primary" id="btnOpenInbox">打开 / 聚焦评论管理工具</button>
+            </div>
+
+            <div class="dashboard-stats-grid">
+              <div class="dash-stat-card"><span id="dashSeen" class="dash-stat-value">0</span><span class="dash-stat-label">发现评论</span></div>
+              <div class="dash-stat-card"><span id="dashSent" class="dash-stat-value">0</span><span class="dash-stat-label">成功私信</span></div>
+              <div class="dash-stat-card"><span id="dashCooldown" class="dash-stat-value">0</span><span class="dash-stat-label">冷却跳过</span></div>
+              <div class="dash-stat-card"><span id="dashNoRule" class="dash-stat-value">0</span><span class="dash-stat-label">反向词跳过</span></div>
+              <div class="dash-stat-card"><span id="dashErrors" class="dash-stat-value">0</span><span class="dash-stat-label">异常</span></div>
+              <div class="dash-stat-card"><span id="dashWorkers" class="dash-stat-value">0/1</span><span class="dash-stat-label">工作页状态</span></div>
+            </div>
+
+            <div class="sub-card">
+              <div class="status-line"><b>当前运行动态：</b><span id="monitorStatusMessage">等待启动...</span></div>
+              <div class="status-line"><b>最后扫描：</b><span id="lastScanText">尚未扫描</span></div>
+              <div class="status-line"><b>页面刷新周期：</b><span id="refreshIntervalText">5 分钟</span></div>
+              <div class="status-line refresh-countdown-line"><b>距离下次刷新：</b><span id="refreshCountdown">--:--</span></div>
+            </div>
+
+            <div class="notice-panel">
+              <b>使用方式：</b>先在 Facebook 中切换到你要管理的公共主页身份，然后启动任务。插件会固定打开 1 个 https://www.facebook.com/professional_dashboard/comments_manager 工作标签页，并在该页面内从新到旧串行处理评论。
+            </div>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="tab-rules">
+          <div class="card">
+            <div class="card-header">
+              <div class="header-with-btn">
+                <div>
+                  <h3>⚡ 反向关键词（不触发）与私信话术</h3>
+                  <p class="subtitle">默认所有评论都发私信。如果评论包含或等于这里的反向关键词，则不发送。所有规则中的私信话术会合并随机使用。</p>
+                </div>
+                <button class="btn btn-success" id="btnAddRule">+ 新建排除规则</button>
+              </div>
+            </div>
+            <div class="rules-list" id="rulesContainer"></div>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="tab-strategy">
+          <div class="card">
+            <div class="card-header">
+              <h3>🛡️ 评论优先级、冷却与重试</h3>
+              <p class="subtitle">这些设置决定扫描速度、用户冷却、旧评论回溯以及发送失败后的处理方式。</p>
+            </div>
+            <div class="form-grid">
+              <div class="notice-panel" style="margin-top:0">
+                <b>单工作页逻辑：</b>启动后自动切到“所有评论”。固定 1 个工作标签页严格串行：按时间定位评论 → 弹出 Messenger 私信框 → 发送并确认 → 记录去重 → 继续下一条。后台按你设置的刷新分钟数刷新一次，再从顶部重新检测最新评论。只处理最近7天；失败达到设定次数后跳过。
+              </div>
+
+              <div class="form-group">
+                <label>Messenger 私信框打开等待时间（秒）</label>
+                <div class="range-inputs"><input type="number" id="inputDialogOpenTimeout" class="form-input" min="5" max="45" value="15"><span>秒</span></div>
+                <small class="help-text">备注：点击评论行“发消息”后，插件会在这段时间内等待“通过 Messenger 回复 / 发消息给…”私信框真正出现；如果第一次没有出现，会重新定位按钮再尝试，避免 Facebook 加载慢被误判为失败。</small>
+              </div>
+
+              <div class="form-group">
+                <label>发送结果确认等待时间（秒）</label>
+                <div class="range-inputs"><input type="number" id="inputSendConfirmTimeout" class="form-input" min="10" max="90" value="30"><span>秒</span></div>
+                <small class="help-text">备注：只有真正点击私信框里的发送按钮后才开始计时。期间检测弹框关闭、输入框清空、已发送提示和明确失败提示；检测到“正在发送”时还会额外等待。</small>
+              </div>
+
+              <div class="form-group checkbox-group">
+                <label class="checkbox-label"><input type="checkbox" id="checkAssumeSuccessNoError" checked><span>发送按钮已点击且未检测到错误时，超时按成功记录（推荐，防止重复发送）</span></label>
+                <small class="help-text">备注：解决“消息实际已经发出，但 Facebook 没有提供明确成功状态”时插件反复重试的问题。只有出现“发送失败 / 无法发送 / 重试”等明确错误才判定失败。</small>
+              </div>
+
+              <div class="form-group">
+                <label>无任务时扫描间隔（秒）</label>
+                <div class="range-inputs"><input type="number" id="inputScanInterval" class="form-input" min="2" max="120" value="3"><span>秒</span></div>
+                <small class="help-text">备注：有新评论时 MutationObserver 会提前唤醒；这个值主要用于页面没有变化时的补扫。它只扫描当前页面 DOM，不会刷新整个 Facebook 页面。</small>
+              </div>
+
+              <div class="form-group">
+                <label>私信成功后继续下一条前等待（秒）</label>
+                <div class="range-inputs"><input type="number" id="inputPostSendWait" class="form-input" min="1" max="20" value="10"><span>秒</span></div>
+                <small class="help-text">备注：私信确认成功并记录去重后等待这段时间，然后直接继续扫描下一条评论；这里不会刷新页面。数值越大，连续发送速度越慢。</small>
+              </div>
+
+              <div class="form-group">
+                <label>评论页面自动刷新间隔（分钟）</label>
+                <div class="range-inputs"><input type="number" id="inputRefreshMinutes" class="form-input" min="1" max="60" value="5"><span>分钟</span></div>
+                <small class="help-text">备注：可以手动设置 2、3、5 分钟等。刷新只由后台定时器触发；发送成功、发送失败、空闲扫描、切换筛选都不会额外刷新页面。</small>
+              </div>
+              <div class="form-group checkbox-group"><label class="checkbox-label"><input type="checkbox" id="checkPeriodicRefresh" checked><span>启用评论页面定时刷新</span></label><small class="help-text">备注：开启后仅由后台定时器按上面的分钟数刷新工作页；关闭后页面不会被插件主动定时刷新。</small></div>
+
+              <div class="form-group">
+                <label>同一用户全局冷却时间（小时）</label>
+                <div class="range-inputs">
+                  <input type="number" id="inputCooldown" class="form-input" min="0" max="720" value="72"><span>小时</span>
+                  <button class="btn btn-secondary btn-sm" id="btnResetUserHistory">清空用户冷却</button>
+                </div>
+                <small class="help-text">备注：同一个用户即使在不同贴文、视频或 Reel 下重复留言，也会在这段时间内跳过第二次私信。设为 0 可关闭用户冷却；“清空用户冷却”会让历史用户重新具备发送资格。</small>
+              </div>
+
+              <div class="form-group">
+                <label>单条评论发送失败最大重试次数</label>
+                <div class="range-inputs"><input type="number" id="inputMaxRetries" class="form-input" min="1" max="10" value="3"><span>次</span></div>
+                <small class="help-text">备注：同一条评论连续发送失败达到此次数后，会记录为失败并跳过，避免一个异常用户一直卡住整个流程。</small>
+              </div>
+
+              <div class="form-group">
+                <label>单次失败后再次尝试等待（秒）</label>
+                <div class="range-inputs"><input type="number" id="inputRetryBackoff" class="form-input" min="1" max="60" value="3"><span>秒</span></div>
+                <small class="help-text">备注：建议 2–5 秒。单次失败后等待这段时间再重试；达到最大重试次数后会记录失败并跳过，再继续下一条。</small>
+              </div>
+
+              <div class="form-group"><label>评论处理时间范围</label><div class="range-inputs"><input type="number" id="inputMaxCommentAgeDays" class="form-input" min="1" max="30" value="7"><span>天</span></div><small class="help-text">备注：默认最近 7 天。超过这个时间范围的评论不会再发送；列表按时间从新到旧处理，避免无限回溯非常久以前的留言。</small></div>
+              <div class="form-group checkbox-group"><label class="checkbox-label"><input type="checkbox" id="checkProcessOlder" checked><span>没有新评论时，继续向下处理最近7天内尚未处理的旧评论</span></label><small class="help-text">备注：开启后顶部没有新任务时会继续向下滚动；关闭后只处理当前顶部可见的新评论。</small></div>
+              <div class="form-group checkbox-group"><label class="checkbox-label"><input type="checkbox" id="checkAutoSelect" checked><span>工作标签页离开评论管理工具后自动返回固定入口</span></label><small class="help-text">备注：建议开启。若 Facebook 内部跳转导致离开评论管理工具，插件会提示并恢复到正确入口；不会高频刷新。</small></div>
+              <div class="notice-panel" style="margin-top:0"><b>固定规则：</b>每次页面加载自动选择“所有评论”；默认所有评论都发私信；只处理最近7天；发送成功后绝不刷新，直接继续下一条；只有后台按你设置的分钟周期允许刷新；命中「反向关键词」或处于用户冷却期才跳过。</div>
+              <div class="form-group checkbox-group"><label class="checkbox-label"><input type="checkbox" id="checkEmergencyBrake" checked><span>检测到 Facebook 验证/限制提示时自动熔断停止</span></label><small class="help-text">备注：检测到验证码、临时限制或安全检查时立即停止任务，避免继续操作。</small></div>
+            </div>
+            <div class="form-actions mt-4">
+              <button class="btn btn-primary" id="btnSaveStrategy" title="保存本页全部参数">保存策略</button>
+              <button class="btn btn-danger-outline" id="btnClearProcessed" title="危险操作：清空后已处理评论可能再次进入发送流程">清空评论去重记录</button>
+              <span class="save-tip" id="tipSaveStrategy"></span>
+            </div>
+            <div class="action-note">备注：修改输入框或勾选项后会自动保存；“清空评论去重记录”仅用于测试，正常使用不要清空，否则历史评论可能再次收到私信。</div>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="tab-logs">
+          <div class="card">
+            <div class="card-header">
+              <div class="header-with-btn">
+                <div>
+                  <h3>📊 评论处理与私信日志</h3>
+                  <p class="subtitle">记录成功、冷却跳过、反向词跳过、发送失败和熔断等状态。</p>
+                </div>
+                <div class="btn-group">
+                  <button class="btn btn-success" id="btnExportExcel">📥 导出 CSV</button>
+                  <button class="btn btn-secondary" id="btnResetStats">重置统计</button>
+                  <button class="btn btn-danger-outline" id="btnClearLogs">清空日志</button>
+                </div>
+              </div>
+            </div>
+            <div class="table-wrapper">
+              <table class="data-table">
+                <thead><tr><th>时间</th><th>用户</th><th>评论</th><th>贴文</th><th>反向关键词</th><th>私信状态</th><th>原因</th></tr></thead>
+                <tbody id="logsTableBody"><tr><td colspan="7" class="empty-cell">暂无日志数据</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="tab-backup">
+          <div class="card">
+            <div class="card-header"><h3>💾 配置导入与完整备份</h3><p class="subtitle">完整备份不仅包含设置、反向关键词和私信话术，还包含“评论处理与私信日志”、已处理评论去重记录、用户冷却历史与失败记录。更换浏览器后导入，可避免已联系用户再次被私信。</p></div>
+            <div class="backup-actions">
+              <div class="backup-box">
+                <h4>完整备份导出</h4>
+                <p>备注：导出 JSON 会同时保存设置、规则、日志、用户冷却、已处理评论及处理元数据。运行中的标签页和临时任务锁不会被备份。</p>
+                <button class="btn btn-primary" id="btnExportConfig">📥 导出完整备份</button>
+              </div>
+              <div class="backup-box">
+                <h4>完整恢复 / 导入</h4>
+                <p>备注：导入新版完整备份会恢复历史去重与日志；旧版仅含设置/规则的配置文件仍可导入，但无法恢复当时未备份的历史记录。导入后任务保持停止。</p>
+                <input type="file" id="fileImportConfig" accept=".json" style="display:none">
+                <button class="btn btn-success" id="btnImportConfig">📤 导入完整备份</button>
+              </div>
+            </div>
+            <div class="notice-panel backup-warning"><b>重要：</b>备份包含评论、用户名和主页链接。请勿分享给他人。换浏览器时请导出完整备份，不要只导出 CSV 日志。</div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div class="modal" id="ruleModal">
+    <div class="modal-content modal-large">
+      <div class="modal-header"><h3 id="modalTitle">编辑排除规则</h3><button class="modal-close" id="btnModalClose">&times;</button></div>
+      <div class="modal-body">
+        <div class="form-group"><label>规则名称</label><input type="text" id="ruleName" class="form-input" placeholder="例：已联系/广告类评论排除"><small class="help-text">备注：仅用于你在控制台识别这套规则，不参与评论匹配。</small></div>
+        <div class="form-group"><label>反向关键词匹配模式</label><select id="ruleMatchType" class="form-select"><option value="contains">包含该词就不发</option><option value="exact">完全等于该词才不发</option></select><small class="help-text">备注：“包含”适合屏蔽带有某个词的评论；“完全等于”只在整条评论完全一致时跳过。</small></div>
+
+        <div class="grid-section">
+          <div class="grid-section-header"><div><label class="grid-title">📊 关键词</label><small class="help-text">支持从 Google 表格 / Excel 批量粘贴。留空表示不屏蔽任何评论。</small></div><div class="grid-header-actions"><button class="btn btn-secondary btn-sm" id="btnAddKeywordCell">+ 添加关键词</button><button class="btn btn-danger-outline btn-sm" id="btnClearKeywordsGrid">清空</button></div></div>
+          <div class="sheets-grid-container grid-keywords" id="keywordsGrid"></div>
+        </div>
+
+        <div class="grid-section mt-3">
+          <div class="grid-section-header"><div><label class="grid-title">✉️ 私信话术库</label><small class="help-text">多套话术会随机抽取。支持 [FirstName]、[FullName]、[Name]、{commentText}、{postTitle}。</small></div><div class="grid-header-actions"><button class="btn btn-secondary btn-sm" id="btnAddDmCell">+ 添加备用话术</button><button class="btn btn-danger-outline btn-sm" id="btnClearDmGrid">清空</button></div></div>
+          <div class="sheets-grid-container grid-templates" id="dmTemplatesGrid"></div>
+        </div>
+      </div>
+      <div class="modal-footer"><button class="btn btn-secondary" id="btnModalCancel">取消</button><button class="btn btn-primary" id="btnModalSave">保存规则</button></div>
+    </div>
+  </div>
+
+  <script src="../utils/storage.js"></script>
+  <script src="../utils/excel_exporter.js"></script>
+  <script src="dashboard.js"></script>
+</body>
+</html>
