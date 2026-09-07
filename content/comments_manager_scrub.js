@@ -1,16 +1,19 @@
 /**
- * FB 评论私信管家 - Facebook 评论管理工具单工作页 v2.12.1
+ * FB 评论私信管家 - Facebook 评论管理工具单工作页 v2.12.2
  *
  * 每个工作标签页执行同一套循环：
  * 最新评论优先 -> 单工作页锁定 -> 直接点击该评论行的“发消息” ->
  * 必须弹出 Messenger 私信框 -> 写入并发送 -> 确认成功 -> 记录去重 ->
  * 回到顶部重新检查最新评论。顶部没有可处理评论时才继续向下滚动旧评论。
+ *
+ * v2.12.2：兼容评论管理工具新 DOM（role=article 评论行、html-li 内 div[role=button]「发消息」、
+ * 点击后打开 docked Messenger 聊天窗而不是旧的 “通过 Messenger 回复” dialog）。旧结构识别逻辑保留。
  */
 
 (() => {
   'use strict';
 
-  const VERSION = '2.12.1';
+  const VERSION = '2.12.2';
   const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
   function setStatusMessage(message) {
@@ -27,19 +30,26 @@
   const HIDE_WORDS = ['隐藏', '隱藏', 'Hide', 'Sakrij', 'Ocultar', 'Masquer'];
   const SEND_WORDS = [
     '发消息', '發消息', '发送', '發送', '传送', '傳送', '发送消息', '發送訊息', '傳送訊息',
-    'Send', 'Send message', 'Pošalji', 'Pošalji poruku', 'Enviar', 'Enviar mensagem', 'Enviar mensaje', 'Envoyer'
+    'Send', 'Send message', 'Pošalji', 'Pošalji poruku', 'Enviar', 'Enviar mensagem', 'Enviar mensaje', 'Envoyer',
+    '按 Enter 发送', '按 Enter 發送', 'Press Enter to send'
   ];
   const BACK_WORDS = [
     '返回评论', '返回評論', '返回', 'Back to comment', 'Back', 'Nazad',
     '关闭', '關閉', 'Close', 'Zatvori', '取消', 'Cancel', 'Otkaži'
   ];
+  const SHARE_WORDS = ['分享', 'Share', 'Podeli', 'Compartir', 'Partager'];
   const PRIVATE_DIALOG_WORDS = [
     '通过 Messenger 回复', '通過 Messenger 回覆', 'Reply via Messenger',
     'Reply through Messenger', 'Respond via Messenger', 'Odgovori putem Messengera',
     'Odgovori preko Messengera',
     '发消息给', '發消息給', '发送消息给', '發送訊息給', 'Send message to',
     '在 Messenger 悄悄回复', '在 Messenger 悄悄回覆', 'privately in Messenger',
-    'Pošalji poruku', 'Pošalji poruku korisniku'
+    'Pošalji poruku', 'Pošalji poruku korisniku',
+    '按 Enter 发送', '按 Enter 發送', 'Press Enter to send'
+  ];
+  const MESSENGER_COMPOSER_LABELS = [
+    'aa', '发消息', '發消息', '写消息', '寫訊息', '输入消息', '輸入訊息',
+    'message', 'send a message', 'poruka'
   ];
   const STOP_WORDS = [
     '验证码', '安全检查', 'Security Check Required', 'Security check',
@@ -553,8 +563,7 @@
 
       try {
         row.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
-        row.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true, view: window }));
-        row.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, cancelable: true, view: window }));
+        hoverElement(row);
       } catch (e) { /* ignore */ }
       await sleep(220 + (openAttempt - 1) * 180);
 
@@ -565,6 +574,9 @@
         continue;
       }
 
+      // 新版评论行把 handler 挂在按钮自身的 Pressable 上，只 hover 整行不够。
+      hoverElement(messageBtn);
+      await sleep(160);
       const beforeInputs = captureVisibleComposerElements();
       safeClick(messageBtn);
       opened = await waitForPrivateReplyDialogAndInput(dialogOpenTimeoutMs, beforeInputs);
@@ -643,37 +655,86 @@
       : 'Messenger 私信框已弹出，但未找到可用发送按钮，Enter 兜底也没有执行成功' };
   }
 
+  function controlActionLabel(el) {
+    const text = String(el?.innerText || el?.textContent || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+    const label = String(el?.getAttribute?.('aria-label') || '').trim();
+    const title = String(el?.getAttribute?.('title') || '').trim();
+    const value = `${text.length <= 80 ? text : ''} ${label} ${title}`.replace(/\s+/g, ' ').trim();
+    return value;
+  }
+
+  function isHeaderMessengerLabel(value) {
+    const v = normalizeForMatch(value);
+    if (/未读消息|未讀訊息|查看所有对话|查看所有對話|在 messenger 中/.test(v)) return true;
+    return /^messenger\b/.test(v) && !/发消息|發消息|send message/.test(v);
+  }
+
+  function isMessageActionLabel(value) {
+    const raw = String(value || '').replace(/\s+/g, ' ').trim();
+    if (!raw || raw.length > 80) return false;
+    if (isHeaderMessengerLabel(raw)) return false;
+    if (VIEW_REPLY_WORDS.some(word => looseMatch(raw, word))) return false;
+    if (REPLY_WORDS.some(word => exactishMatch(raw, word))) return false;
+    if (SHARE_WORDS.some(word => exactishMatch(raw, word))) return false;
+    if (HIDE_WORDS.some(word => exactishMatch(raw, word))) return false;
+    return MESSAGE_WORDS.some(word => {
+      if (exactishMatch(raw, word)) return true;
+      // 单词 "Message" 会误匹配顶栏 Messenger 图标，只允许精确命中。
+      if (normalizeForMatch(word) === 'message') return false;
+      return raw.length <= 40 && looseMatch(raw, word);
+    });
+  }
+
   function findMessageButtonInRow(row) {
-    const nodes = Array.from(row.querySelectorAll('[role="button"], button, a, span, div')).filter(isVisible);
+    if (!row) return null;
+    const nodes = [];
+    if (row.matches?.('[role="button"], button, a, [tabindex="0"]')) nodes.push(row);
+    nodes.push(...row.querySelectorAll('[role="button"], button, a[role="link"], a, [tabindex="0"]'));
     const hits = [];
+    const seen = new Set();
     for (const el of nodes) {
-      const text = getText(el);
-      const label = String(el.getAttribute('aria-label') || '').trim();
-      const title = String(el.getAttribute('title') || '').trim();
-      const value = `${text} ${label} ${title}`.trim();
-      if (!value || value.length > 120) continue;
-      if (!MESSAGE_WORDS.some(word => looseMatch(value, word))) continue;
+      if (!isVisible(el)) continue;
+      const value = controlActionLabel(el);
+      if (!isMessageActionLabel(value)) continue;
       const clickable = el.closest('[role="button"], button, a, [tabindex="0"]') || el;
-      if (!isVisible(clickable)) continue;
+      if (!isVisible(clickable) || !row.contains(clickable) || seen.has(clickable)) continue;
+      seen.add(clickable);
       const r = clickable.getBoundingClientRect();
-      hits.push({ el: clickable, r });
+      if (r.width < 8 || r.height < 8) continue;
+      const exact = MESSAGE_WORDS.some(word => exactishMatch(value, word));
+      hits.push({ el: clickable, r, exact, area: r.width * r.height });
     }
-    hits.sort((a, b) => b.r.left - a.r.left || a.r.top - b.r.top);
+    if (!hits.length) {
+      for (const el of row.querySelectorAll('span, div')) {
+        if (!isVisible(el)) continue;
+        const value = controlActionLabel(el);
+        if (!isMessageActionLabel(value)) continue;
+        const clickable = el.closest('[role="button"], button, a, [tabindex="0"]') || el;
+        if (!isVisible(clickable) || !row.contains(clickable) || seen.has(clickable)) continue;
+        seen.add(clickable);
+        const r = clickable.getBoundingClientRect();
+        if (r.width < 8 || r.height < 8) continue;
+        const exact = MESSAGE_WORDS.some(word => exactishMatch(value, word));
+        hits.push({ el: clickable, r, exact, area: r.width * r.height });
+      }
+    }
+    // 优先精确文案「发消息」，再取更小的真实按钮，避免点到包住整行动作区的容器。
+    hits.sort((a, b) => Number(b.exact) - Number(a.exact) || a.area - b.area || b.r.left - a.r.left);
     return hits[0]?.el || null;
   }
 
   function captureVisibleComposerElements() {
-    return new Set(Array.from(document.querySelectorAll('[contenteditable="true"], textarea, input[type="text"]')).filter(isVisible));
+    return new Set(Array.from(document.querySelectorAll('[contenteditable="true"], textarea, input[type="text"], [role="textbox"]')).filter(isVisible));
   }
 
   function isSearchLikeInput(input) {
-    const label = `${input?.getAttribute?.('aria-label') || ''} ${input?.getAttribute?.('placeholder') || ''}`.toLowerCase();
+    const label = `${input?.getAttribute?.('aria-label') || ''} ${input?.getAttribute?.('placeholder') || ''} ${input?.getAttribute?.('aria-placeholder') || ''}`.toLowerCase();
     return label.includes('search') || label.includes('搜索') || label.includes('搜尋') || label.includes('pretraži') || label.includes('pretrazi');
   }
 
   function findComposerInSurface(surface) {
     if (!surface) return null;
-    return Array.from(surface.querySelectorAll('[contenteditable="true"], textarea, input[type="text"]'))
+    return Array.from(surface.querySelectorAll('[contenteditable="true"], textarea, input[type="text"], [role="textbox"]'))
       .filter(isVisible)
       .find(el => !isSearchLikeInput(el)) || null;
   }
@@ -683,9 +744,43 @@
     return r.width >= window.innerWidth * 0.92 || r.height >= window.innerHeight * 0.88;
   }
 
+  function isInsideCommentArticle(el) {
+    const article = el?.closest?.('[role="article"]');
+    return !!(article && isCommentArticle(article));
+  }
+
+  function isMessengerComposerInput(input) {
+    if (!input || isSearchLikeInput(input)) return false;
+    const label = normalizeForMatch(`${input.getAttribute('aria-label') || ''} ${input.getAttribute('placeholder') || ''} ${input.getAttribute('aria-placeholder') || ''}`);
+    if (!label) return false;
+    return MESSENGER_COMPOSER_LABELS.some(word => label === word || label.startsWith(`${word} `) || label.endsWith(` ${word}`));
+  }
+
+  function isCompactChatPanel(surface) {
+    if (!surface) return false;
+    const r = surface.getBoundingClientRect();
+    return r.width >= 260 && r.width <= 760 && r.height >= 160 && r.height <= 980;
+  }
+
+  function hasMessengerChrome(surface, input) {
+    if (isMessengerComposerInput(input)) return true;
+    const aria = normalizeForMatch(`${surface?.getAttribute?.('aria-label') || ''} ${getText(surface).slice(0, 600)}`);
+    if (PRIVATE_DIALOG_WORDS.some(word => aria.includes(normalizeForMatch(word)))) return true;
+    if (/发消息给|發消息給|新消息|通过 messenger|reply via messenger/.test(aria)) return true;
+    const buttons = Array.from(surface.querySelectorAll('[role="button"], button')).filter(isVisible);
+    for (const b of buttons) {
+      const v = normalizeForMatch(`${b.getAttribute('aria-label') || ''} ${getText(b)}`);
+      if (!v || v.length > 60) continue;
+      if (/按 enter 发送|按 enter 發送|press enter to send/.test(v)) return true;
+    }
+    return false;
+  }
+
   function looksLikePrivateReplySurface(surface, input = null) {
     if (!surface || !isVisible(surface)) return false;
     if (input && isSearchLikeInput(input)) return false;
+    // 公开评论回复框位于评论 article 内，绝不能当成 Messenger 私信框。
+    if (input && isInsideCommentArticle(input)) return false;
     if (isOversizedPageSurface(surface) && surface.getAttribute('role') !== 'dialog' && surface.getAttribute('aria-modal') !== 'true') {
       return false;
     }
@@ -694,18 +789,21 @@
 
     const hasMessenger = text.includes('messenger');
     const hasReplyContext = text.includes('回复') || text.includes('回覆') || text.includes('reply') || text.includes('private') || text.includes('悄悄') || text.includes('odgovori') || text.includes('poruku');
-    return hasMessenger && hasReplyContext;
+    if (hasMessenger && hasReplyContext) return true;
+    return isCompactChatPanel(surface) && hasMessengerChrome(surface, input || findComposerInSurface(surface));
   }
 
   function isConfirmedPrivateMessengerDialog(dialog, input) {
     if (!dialog || !input || !isVisible(dialog) || !isVisible(input)) return false;
     if (isSearchLikeInput(input)) return false;
     if (!dialog.contains(input)) return false;
+    if (isInsideCommentArticle(input)) return false;
     if (!looksLikePrivateReplySurface(dialog, input)) return false;
     const role = String(dialog.getAttribute('role') || '');
     const modal = String(dialog.getAttribute('aria-modal') || '');
     if (role === 'dialog' || modal === 'true') return true;
     if (isOversizedPageSurface(dialog)) return false;
+    if (isCompactChatPanel(dialog) && hasMessengerChrome(dialog, input)) return true;
     const text = normalizeForMatch(getText(dialog));
     const hasExplicitPrivateWords = PRIVATE_DIALOG_WORDS.some(word => text.includes(normalizeForMatch(word)));
     const r = dialog.getBoundingClientRect();
@@ -722,13 +820,16 @@
       if (looksLikePrivateReplySurface(p, input)) {
         const r = p.getBoundingClientRect();
         if (r.width >= 320 && r.height >= 220) return p;
+        if (isCompactChatPanel(p) && hasMessengerChrome(p, input)) return p;
       }
     }
     return null;
   }
 
   function findVisiblePrivateReplySurface(beforeInputs = new Set()) {
-    const modalCandidates = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"]')).filter(isVisible);
+    const modalCandidates = Array.from(document.querySelectorAll(
+      '[role="dialog"], [aria-modal="true"], [aria-label*="发消息给"], [aria-label*="發消息給"], [aria-label*="新消息"], [aria-label*="Send message to"]'
+    )).filter(isVisible);
     for (const surface of modalCandidates) {
       const input = findComposerInSurface(surface);
       if (input && looksLikePrivateReplySurface(surface, input)) return { dialog: surface, input };
@@ -736,7 +837,7 @@
 
     // Facebook 有时把这个浮层挂在 Portal 中但不再提供 role="dialog"。
     // 这时从“新出现/重新可见”的编辑框向上找带 Messenger、返回评论、发送等特征的浮层。
-    const inputs = Array.from(document.querySelectorAll('[contenteditable="true"], textarea, input[type="text"]'))
+    const inputs = Array.from(document.querySelectorAll('[contenteditable="true"], textarea, input[type="text"], [role="textbox"]'))
       .filter(isVisible)
       .filter(el => !isSearchLikeInput(el));
     for (const input of inputs) {
@@ -1049,6 +1150,19 @@
     return !document.contains(dialog) || !isVisible(dialog);
   }
 
+  function isCommentArticle(el) {
+    if (!el || el.getAttribute('role') !== 'article') return false;
+    const aria = String(el.getAttribute('aria-label') || '');
+    if (/评论者|評論者|commenter|comment by|komentarisao|komentirao/i.test(aria)) return true;
+    const lines = splitLines(getText(el));
+    if (lines.length < 2 || lines.length > 40) return false;
+    const hasTime = lines.some(hasRelativeTime) || hasRelativeTime(aria) || /小时前|小時前|分钟前|分鐘前|天前|刚刚|剛剛/.test(aria);
+    const hasReply = lines.some(line => REPLY_WORDS.some(w => exactishMatch(line, w) || (line.length <= 16 && looseMatch(line, w))));
+    const hasMsg = lines.some(line => MESSAGE_WORDS.some(w => exactishMatch(line, w)));
+    const hasHide = HIDE_WORDS.some(w => looseMatch(aria, w)) || lines.some(line => HIDE_WORDS.some(w => looseMatch(line, w)));
+    return hasTime && (hasReply || hasMsg || hasHide);
+  }
+
   function collectCommentRows(quickMode = false) {
     const selectors = '[role="button"], button, a, span';
     const actionNodes = Array.from(document.querySelectorAll(selectors)).filter(el => {
@@ -1060,7 +1174,29 @@
 
     const candidates = [];
     const seen = new Set();
+    const addCandidate = (p, lines, hasReply, hasHide) => {
+      const r = p.getBoundingClientRect();
+      const key = `${Math.round(r.top)}:${Math.round(r.height)}:${Math.round(r.left)}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      candidates.push({ el: p, r, score: rowScore(p, lines, hasReply, hasHide) });
+    };
+
     for (const action of actionNodes) {
+      const article = action.closest?.('[role="article"]');
+      if (article && isVisible(article) && isCommentArticle(article)) {
+        const r = article.getBoundingClientRect();
+        if (r.bottom >= 0 && r.top <= window.innerHeight && r.width >= 180 && r.height >= 40 && r.height <= 900) {
+          const lines = splitLines(getText(article));
+          const hasReply = lines.some(line => REPLY_WORDS.some(w => looseMatch(line, w)));
+          const hasHide = lines.some(line => HIDE_WORDS.some(w => looseMatch(line, w)))
+            || HIDE_WORDS.some(w => looseMatch(article.getAttribute('aria-label') || '', w));
+          addCandidate(article, lines, hasReply, hasHide);
+          if (quickMode && candidates.length >= 8) break;
+          continue;
+        }
+      }
+
       let p = action;
       for (let depth = 0; depth < 10 && p && p !== document.body; depth++, p = p.parentElement) {
         if (!(p instanceof Element)) break;
@@ -1073,14 +1209,25 @@
         const hasHide = lines.some(line => HIDE_WORDS.some(w => looseMatch(line, w)));
         const hasTime = lines.some(line => hasRelativeTime(line)) || lines.some(line => hasAbsolutePostTime(line));
         if (!hasTime || (!hasReply && !hasHide)) continue;
-        const key = `${Math.round(r.top)}:${Math.round(r.height)}:${Math.round(r.left)}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          candidates.push({ el: p, r, score: rowScore(p, lines, hasReply, hasHide) });
-        }
+        addCandidate(p, lines, hasReply, hasHide);
         break;
       }
       if (quickMode && candidates.length >= 8) break;
+    }
+
+    if (!quickMode || candidates.length < 8) {
+      for (const article of document.querySelectorAll('[role="article"]')) {
+        if (!isVisible(article) || !isCommentArticle(article)) continue;
+        const r = article.getBoundingClientRect();
+        if (r.bottom < 0 || r.top > window.innerHeight) continue;
+        if (r.width < 180 || r.height < 40 || r.height > 900) continue;
+        const lines = splitLines(getText(article));
+        const hasReply = lines.some(line => REPLY_WORDS.some(w => looseMatch(line, w)));
+        const hasHide = lines.some(line => HIDE_WORDS.some(w => looseMatch(line, w)))
+          || HIDE_WORDS.some(w => looseMatch(article.getAttribute('aria-label') || '', w));
+        addCandidate(article, lines, hasReply, hasHide);
+        if (quickMode && candidates.length >= 8) break;
+      }
     }
 
     // 同一行可能从多个动作按钮找到，按 top 合并，优先更小更精确的容器。
@@ -1096,6 +1243,7 @@
 
   function rowScore(el, lines, hasReply, hasHide) {
     let score = 0;
+    if (el?.getAttribute?.('role') === 'article') score += 4;
     if (hasReply) score += 3;
     if (hasHide) score += 3;
     if (lines.some(hasRelativeTime)) score += 5;
@@ -1173,7 +1321,7 @@
   }
 
   function parseRelativeAgeMs(text) {
-    const raw = normalizeForMatch(text).replace(/前$/, '').trim();
+    const raw = normalizeForMatch(text).replace(/^约\s*/, '').replace(/前$/, '').trim();
     if (!raw) return null;
     if (['刚刚', '剛剛', 'just now', 'upravo sada', 'sada'].includes(raw)) return 0;
     if (['今天', 'today', 'danas'].includes(raw)) return 6 * 60 * 60 * 1000;
@@ -1232,17 +1380,22 @@
 
   function pickLikelyUserName(row, lines, postTitle) {
     const els = Array.from(row.querySelectorAll('strong, b, a[href], span')).filter(isVisible);
-    for (const el of els) {
-      const t = getText(el);
-      if (!t || t === postTitle || t.length < 2 || t.length > 100) continue;
-      if (ACTION_WORDS.some(w => looseMatch(t, w))) continue;
-      if (hasAbsolutePostTime(t) || hasRelativeTime(t)) continue;
-      const r = el.getBoundingClientRect();
-      const rr = row.getBoundingClientRect();
-      if (r.left < rr.left + rr.width * 0.28) continue; // 排除左侧贴文标题区域
-      return t;
-    }
-    return '';
+    const tryPick = (skipLeftColumn) => {
+      for (const el of els) {
+        const t = getText(el);
+        if (!t || t === postTitle || t.length < 2 || t.length > 100) continue;
+        if (ACTION_WORDS.some(w => looseMatch(t, w))) continue;
+        if (SHARE_WORDS.some(w => exactishMatch(t, w))) continue;
+        if (hasAbsolutePostTime(t) || hasRelativeTime(t)) continue;
+        const r = el.getBoundingClientRect();
+        const rr = row.getBoundingClientRect();
+        if (skipLeftColumn && r.left < rr.left + rr.width * 0.28) continue; // 旧布局：排除左侧贴文标题
+        return t;
+      }
+      return '';
+    };
+    // 新布局评论者在左侧、贴文缩略图在右侧；旧布局找不到时再允许左侧名字。
+    return tryPick(true) || tryPick(false);
   }
 
   function pickLikelyCommentText(lines, postTitle, userName) {
@@ -1398,7 +1551,7 @@
   }
 
   function looksLikeRelativeTimeToken(text) {
-    const t = normalizeForMatch(text);
+    const t = normalizeForMatch(text).replace(/^约\s*/, '').replace(/前$/, '').trim();
     return /^(?:\d+\s*(?:秒|分钟|分鐘|小时|小時|天|周|週|个月|個月|年|s|sec|m|min|h|hr|d|day|w|week|mo|month|y|year)|刚刚|剛剛|just now|今天|昨天|today|yesterday|danas|juče|juce|周[一二三四五六日天]|星期[一二三四五六日天]|\d{1,2}月\d{1,2}日)$/i.test(t);
   }
 
@@ -1510,14 +1663,56 @@
     return r.width > 0 && r.height > 0 && r.bottom >= 0 && r.right >= 0 && r.top <= window.innerHeight && r.left <= window.innerWidth;
   }
 
+  function hoverElement(el) {
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const x = r.left + Math.max(1, r.width / 2);
+    const y = r.top + Math.max(1, r.height / 2);
+    const base = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, screenX: x, screenY: y, composed: true };
+    try { el.dispatchEvent(new MouseEvent('mouseover', base)); } catch (e) { /* ignore */ }
+    try { el.dispatchEvent(new MouseEvent('mousemove', base)); } catch (e) { /* ignore */ }
+    try { el.dispatchEvent(new MouseEvent('mouseenter', { ...base, bubbles: false })); } catch (e) { /* ignore */ }
+    try {
+      if (typeof PointerEvent === 'function') {
+        const p = { ...base, pointerId: 1, pointerType: 'mouse', isPrimary: true };
+        el.dispatchEvent(new PointerEvent('pointerover', p));
+        el.dispatchEvent(new PointerEvent('pointerenter', { ...p, bubbles: false }));
+        el.dispatchEvent(new PointerEvent('pointermove', p));
+      }
+    } catch (e) { /* ignore */ }
+  }
+
   function safeClick(el) {
     if (!el) return;
     const clickable = el.closest?.('[role="button"], button, a, [tabindex="0"]') || el;
     try { clickable.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' }); } catch (e) { /* ignore */ }
+    hoverElement(clickable);
+    const r = clickable.getBoundingClientRect();
+    const x = r.left + Math.max(2, r.width / 2);
+    const y = r.top + Math.max(2, r.height / 2);
+    const mouse = {
+      bubbles: true, cancelable: true, view: window,
+      clientX: x, clientY: y, screenX: x, screenY: y,
+      button: 0, buttons: 1, composed: true, detail: 1
+    };
+    let target = clickable;
     try {
-      clickable.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-      clickable.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
-      clickable.click();
+      const topEl = document.elementFromPoint(x, y);
+      if (topEl && (clickable === topEl || clickable.contains(topEl))) target = topEl;
+    } catch (e) { /* ignore */ }
+    try {
+      if (typeof PointerEvent === 'function') {
+        const p = { ...mouse, pointerId: 1, pointerType: 'mouse', isPrimary: true, width: 1, height: 1, pressure: 0.5 };
+        target.dispatchEvent(new PointerEvent('pointerdown', p));
+        target.dispatchEvent(new MouseEvent('mousedown', mouse));
+        try { target.focus?.(); } catch (e3) { /* ignore */ }
+        target.dispatchEvent(new PointerEvent('pointerup', { ...p, buttons: 0, pressure: 0 }));
+        target.dispatchEvent(new MouseEvent('mouseup', { ...mouse, buttons: 0 }));
+      } else {
+        target.dispatchEvent(new MouseEvent('mousedown', mouse));
+        target.dispatchEvent(new MouseEvent('mouseup', { ...mouse, buttons: 0 }));
+      }
+      target.click();
     } catch (e) {
       try { clickable.click(); } catch (e2) { /* ignore */ }
     }
