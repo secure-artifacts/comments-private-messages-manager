@@ -29,8 +29,8 @@
   const VIEW_REPLY_WORDS = ['查看回复', '查看回覆', 'View replies', 'View reply', 'Prikaži odgovore', 'Pogledaj odgovore'];
   const HIDE_WORDS = ['隐藏', '隱藏', 'Hide', 'Sakrij', 'Ocultar', 'Masquer'];
   const SEND_WORDS = [
-    '发消息', '發消息', '发送', '發送', '传送', '傳送', '发送消息', '發送訊息', '傳送訊息',
-    'Send', 'Send message', 'Pošalji', 'Pošalji poruku', 'Enviar', 'Enviar mensagem', 'Enviar mensaje', 'Envoyer',
+    '发送', '發送', '传送', '傳送',
+    'Send', 'Pošalji', 'Enviar', 'Envoyer',
     '按 Enter 发送', '按 Enter 發送', 'Press Enter to send'
   ];
   const BACK_WORDS = [
@@ -578,8 +578,10 @@
       hoverElement(messageBtn);
       await sleep(160);
       const beforeInputs = captureVisibleComposerElements();
-      safeClick(messageBtn);
-      opened = await waitForPrivateReplyDialogAndInput(dialogOpenTimeoutMs, beforeInputs);
+      // 打开私信框优先原生 click；pointer-only 在部分评论管理工具版本上不会触发。
+      safeClick(messageBtn, { mode: openAttempt === 1 ? 'click' : 'press' });
+      clickMessageButtonFallback(messageBtn);
+      opened = await waitForPrivateReplyDialogAndInput(dialogOpenTimeoutMs, beforeInputs, { afterMessageClick: true });
       if (opened?.dialog && opened?.input) break;
 
       lastOpenError = `第 ${openAttempt}/${dialogOpenClicks} 次点击「发消息」后，${Math.round(dialogOpenTimeoutMs / 1000)} 秒内没有识别到 Messenger 私信框`;
@@ -591,7 +593,7 @@
     }
 
     const { dialog, input } = opened;
-    if (!isConfirmedPrivateMessengerDialog(dialog, input)) {
+    if (!isConfirmedPrivateMessengerDialog(dialog, input, { afterMessageClick: true })) {
       await closePrivateReplyDialog(dialog);
       return { ok: false, error: '打开的浮层无法确认为 Messenger 私信框，已中止以免误发公开评论' };
     }
@@ -600,16 +602,21 @@
       await closePrivateReplyDialog(dialog);
       return { ok: false, error: 'Messenger 私信框已弹出，但无法按原格式写入私信内容（包含换行校验）' };
     }
+    if (composerLooksDuplicated(readInputText(input), dmText)) {
+      await closePrivateReplyDialog(dialog);
+      return { ok: false, error: 'Messenger 私信框写入了重复内容，已中止以免发出两遍' };
+    }
 
-    await sleep(500);
+    await nudgeComposerForSend(input);
+    await sleep(280);
     const beforeText = readInputText(input);
     const beforeEchoes = captureMessageEchoes(dialog, input);
-    const sendBtn = findSendButton(dialog, input, true);
+    const sendBtn = await waitForEnabledSendButton(dialog, input, 2500);
     const timeoutMs = Math.max(10000, Math.min(90000, Number(settings.sendConfirmTimeoutSeconds || 30) * 1000));
     const progressGraceMs = Math.max(15000, Math.min(90000, Number(settings.sendInProgressGraceSeconds || 45) * 1000));
 
     if (sendBtn) {
-      safeClick(sendBtn);
+      safeClick(sendBtn, { mode: 'click' });
       const confirmed = await waitForSendConfirmation(input, dialog, beforeText, timeoutMs, dmText, beforeEchoes, sendBtn, progressGraceMs);
       if (confirmed.ok) {
         await closePrivateReplyDialog(dialog);
@@ -744,9 +751,31 @@
     return r.width >= window.innerWidth * 0.92 || r.height >= window.innerHeight * 0.88;
   }
 
+  function isPublicCommentComposer(input) {
+    if (!input) return false;
+    const label = normalizeForMatch(`${input.getAttribute('aria-label') || ''} ${input.getAttribute('placeholder') || ''} ${input.getAttribute('aria-placeholder') || ''}`);
+    return /写评论|寫評論|write a comment|write a reply|leave a comment|公开评论|公開評論|comment as/.test(label);
+  }
+
   function isInsideCommentArticle(el) {
     const article = el?.closest?.('[role="article"]');
-    return !!(article && isCommentArticle(article));
+    if (!(article && isCommentArticle(article))) return false;
+    // 私信输入框有时会内嵌在评论卡片里，不能一律当成公开评论框。
+    if (el && (isMessengerComposerInput(el) || !isPublicCommentComposer(el))) return false;
+    return true;
+  }
+
+  function clickMessageButtonFallback(btn) {
+    if (!btn) return;
+    const r = btn.getBoundingClientRect();
+    const x = r.left + Math.max(2, r.width / 2);
+    const y = r.top + Math.max(2, r.height / 2);
+    let top = null;
+    try { top = document.elementFromPoint(x, y); } catch (e) { /* ignore */ }
+    const wrap = btn.closest('li, [role="button"]') || btn;
+    if (top && wrap.contains(top) && top !== btn) {
+      try { top.click(); } catch (e) { /* ignore */ }
+    }
   }
 
   function isMessengerComposerInput(input) {
@@ -779,8 +808,8 @@
   function looksLikePrivateReplySurface(surface, input = null) {
     if (!surface || !isVisible(surface)) return false;
     if (input && isSearchLikeInput(input)) return false;
-    // 公开评论回复框位于评论 article 内，绝不能当成 Messenger 私信框。
-    if (input && isInsideCommentArticle(input)) return false;
+    if (input && isPublicCommentComposer(input)) return false;
+    if (input && isInsideCommentArticle(input) && !isMessengerComposerInput(input)) return false;
     if (isOversizedPageSurface(surface) && surface.getAttribute('role') !== 'dialog' && surface.getAttribute('aria-modal') !== 'true') {
       return false;
     }
@@ -790,43 +819,48 @@
     const hasMessenger = text.includes('messenger');
     const hasReplyContext = text.includes('回复') || text.includes('回覆') || text.includes('reply') || text.includes('private') || text.includes('悄悄') || text.includes('odgovori') || text.includes('poruku');
     if (hasMessenger && hasReplyContext) return true;
+    if (isMessengerComposerInput(input || findComposerInSurface(surface))) return true;
     return isCompactChatPanel(surface) && hasMessengerChrome(surface, input || findComposerInSurface(surface));
   }
 
-  function isConfirmedPrivateMessengerDialog(dialog, input) {
+  function isConfirmedPrivateMessengerDialog(dialog, input, options = {}) {
     if (!dialog || !input || !isVisible(dialog) || !isVisible(input)) return false;
     if (isSearchLikeInput(input)) return false;
+    if (isPublicCommentComposer(input)) return false;
     if (!dialog.contains(input)) return false;
-    if (isInsideCommentArticle(input)) return false;
+    if (isInsideCommentArticle(input) && !isMessengerComposerInput(input) && !options.afterMessageClick) return false;
+    if (options.afterMessageClick && dialog.contains(input) && !isOversizedPageSurface(dialog)) return true;
     if (!looksLikePrivateReplySurface(dialog, input)) return false;
     const role = String(dialog.getAttribute('role') || '');
     const modal = String(dialog.getAttribute('aria-modal') || '');
     if (role === 'dialog' || modal === 'true') return true;
     if (isOversizedPageSurface(dialog)) return false;
-    if (isCompactChatPanel(dialog) && hasMessengerChrome(dialog, input)) return true;
+    if (isMessengerComposerInput(input) || (isCompactChatPanel(dialog) && hasMessengerChrome(dialog, input))) return true;
     const text = normalizeForMatch(getText(dialog));
     const hasExplicitPrivateWords = PRIVATE_DIALOG_WORDS.some(word => text.includes(normalizeForMatch(word)));
     const r = dialog.getBoundingClientRect();
-    return hasExplicitPrivateWords && r.width >= 320 && r.height >= 220;
+    return hasExplicitPrivateWords && r.width >= 280 && r.height >= 140;
   }
 
   function findPrivateReplySurfaceForInput(input) {
     let p = input;
-    for (let depth = 0; depth < 14 && p && p !== document.body; depth++, p = p.parentElement) {
+    for (let depth = 0; depth < 16 && p && p !== document.body; depth++, p = p.parentElement) {
       if (!(p instanceof Element) || !isVisible(p)) continue;
       if (p.getAttribute('role') === 'dialog' || p.getAttribute('aria-modal') === 'true') {
         if (looksLikePrivateReplySurface(p, input)) return p;
       }
       if (looksLikePrivateReplySurface(p, input)) {
         const r = p.getBoundingClientRect();
-        if (r.width >= 320 && r.height >= 220) return p;
+        if (r.width >= 280 && r.height >= 140) return p;
         if (isCompactChatPanel(p) && hasMessengerChrome(p, input)) return p;
+        if (isMessengerComposerInput(input) && r.width >= 200 && r.height >= 70) return p;
       }
     }
     return null;
   }
 
-  function findVisiblePrivateReplySurface(beforeInputs = new Set()) {
+  function findVisiblePrivateReplySurface(beforeInputs = new Set(), options = {}) {
+    const afterMessageClick = !!options.afterMessageClick;
     const modalCandidates = Array.from(document.querySelectorAll(
       '[role="dialog"], [aria-modal="true"], [aria-label*="发消息给"], [aria-label*="發消息給"], [aria-label*="新消息"], [aria-label*="Send message to"]'
     )).filter(isVisible);
@@ -835,23 +869,28 @@
       if (input && looksLikePrivateReplySurface(surface, input)) return { dialog: surface, input };
     }
 
-    // Facebook 有时把这个浮层挂在 Portal 中但不再提供 role="dialog"。
-    // 这时从“新出现/重新可见”的编辑框向上找带 Messenger、返回评论、发送等特征的浮层。
     const inputs = Array.from(document.querySelectorAll('[contenteditable="true"], textarea, input[type="text"], [role="textbox"]'))
       .filter(isVisible)
-      .filter(el => !isSearchLikeInput(el));
+      .filter(el => !isSearchLikeInput(el))
+      .filter(el => !isPublicCommentComposer(el));
     for (const input of inputs) {
+      const isNew = !beforeInputs.has(input);
       const surface = findPrivateReplySurfaceForInput(input);
-      if (!surface) continue;
-      if (!beforeInputs.has(input) || looksLikePrivateReplySurface(surface, input)) return { dialog: surface, input };
+      if (surface && (isNew || looksLikePrivateReplySurface(surface, input))) return { dialog: surface, input };
+      if (afterMessageClick && isNew) {
+        const fallback = input.closest('[role="dialog"], [aria-modal="true"]') || input.parentElement;
+        if (fallback && isVisible(fallback) && !isOversizedPageSurface(fallback)) {
+          return { dialog: fallback, input };
+        }
+      }
     }
     return null;
   }
 
-  async function waitForPrivateReplyDialogAndInput(timeoutMs, beforeInputs = new Set()) {
+  async function waitForPrivateReplyDialogAndInput(timeoutMs, beforeInputs = new Set(), options = {}) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
-      const found = findVisiblePrivateReplySurface(beforeInputs);
+      const found = findVisiblePrivateReplySurface(beforeInputs, options);
       if (found?.dialog && found?.input) return found;
       await sleep(220);
     }
@@ -877,34 +916,112 @@
       .trim();
   }
 
+  function countNeedle(haystack, needle) {
+    if (!haystack || !needle) return 0;
+    let count = 0;
+    let pos = 0;
+    while (pos <= haystack.length - needle.length) {
+      const idx = haystack.indexOf(needle, pos);
+      if (idx < 0) break;
+      count += 1;
+      pos = idx + Math.max(1, needle.length);
+    }
+    return count;
+  }
+
+  function composerLooksDuplicated(actual, expected) {
+    const e = composerTextForCompare(expected);
+    const a = composerTextForCompare(actual);
+    if (!e || !a) return false;
+    const eFlat = e.replace(/\s+/g, ' ').trim();
+    const aFlat = a.replace(/\s+/g, ' ').trim();
+    if (aFlat === eFlat) return false;
+    if (eFlat.length >= 2 && countNeedle(aFlat, eFlat) >= 2) return true;
+    if (aFlat === `${eFlat} ${eFlat}` || aFlat === `${eFlat}${eFlat}`) return true;
+    const eC = eFlat.replace(/\s+/g, '');
+    const aC = aFlat.replace(/\s+/g, '');
+    if (eC.length >= 4 && countNeedle(aC, eC) >= 2) return true;
+    if (eC.length >= 4 && aC === eC + eC) return true;
+    if (aFlat.length >= Math.max(eFlat.length * 1.8, eFlat.length + 8)) return true;
+    const aLines = a.split('\n').map(s => s.trim()).filter(Boolean);
+    const eLines = e.split('\n').map(s => s.trim()).filter(Boolean);
+    if (eLines.length && aLines.length === eLines.length * 2) {
+      const half = aLines.length / 2;
+      if (aLines.slice(0, half).join('\n') === aLines.slice(half).join('\n')) return true;
+    }
+    return false;
+  }
+
   function insertedTextLooksCorrect(input, expectedText) {
     const expected = composerTextForCompare(expectedText);
     const actual = composerTextForCompare(readInputText(input));
     if (!expected || !actual) return false;
+    if (composerLooksDuplicated(actual, expected)) return false;
     if (expected.includes('\n')) {
       const expectedBreaks = (expected.match(/\n/g) || []).length;
       const actualBreaks = (actual.match(/\n/g) || []).length;
-      // 至少保留绝大多数换行；不能再出现“名字+正文全部粘成一行”。
       if (actualBreaks < Math.max(1, Math.floor(expectedBreaks * 0.75))) return false;
     }
     const eFlat = expected.replace(/\s+/g, ' ').trim();
     const aFlat = actual.replace(/\s+/g, ' ').trim();
-    return aFlat === eFlat || aFlat.includes(eFlat.slice(0, Math.min(80, eFlat.length)));
+    if (aFlat === eFlat) return true;
+    if (aFlat.length > eFlat.length + Math.max(4, Math.ceil(eFlat.length * 0.12))) return false;
+    return aFlat.includes(eFlat.slice(0, Math.min(80, eFlat.length)));
   }
 
-  function escapeHtmlForComposer(text) {
-    return String(text || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
-  }
-
-  function dispatchComposerInput(input, data, inputType = 'insertText') {
+  function fireBeforeInput(input, inputType, data = null, dataTransfer = null) {
+    const init = { bubbles: true, cancelable: true, composed: true, inputType, data };
     try {
-      input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType, data }));
+      const event = new InputEvent('beforeinput', dataTransfer ? { ...init, dataTransfer } : init);
+      if (dataTransfer && !event.dataTransfer) {
+        try { Object.defineProperty(event, 'dataTransfer', { get: () => dataTransfer }); } catch (e) { /* ignore */ }
+      }
+      return input.dispatchEvent(event);
     } catch (e) {
-      input.dispatchEvent(new Event('input', { bubbles: true }));
+      try {
+        return input.dispatchEvent(new InputEvent('beforeinput', init));
+      } catch (e2) {
+        return false;
+      }
+    }
+  }
+
+  async function clearComposer(input) {
+    try { input.focus(); } catch (e) { /* ignore */ }
+    try {
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(input);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } catch (e) {
+      try { document.execCommand('selectAll', false, null); } catch (e2) { /* ignore */ }
+    }
+    fireBeforeInput(input, 'deleteContentBackward');
+    try { document.execCommand('delete', false, null); } catch (e) { /* ignore */ }
+    if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
+      try {
+        const proto = input.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+        if (setter) setter.call(input, ''); else input.value = '';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      } catch (e) { /* ignore */ }
+    }
+    await sleep(80);
+  }
+
+  function insertLexicalByPaste(input, value) {
+    const dt = new DataTransfer();
+    dt.setData('text/plain', value);
+    // 只发 beforeinput。再发 paste / execCommand('insertText') 会被 Lexical 再写入一遍。
+    fireBeforeInput(input, 'insertFromPaste', value, dt);
+  }
+
+  function insertLexicalByBeforeInputLines(input, value) {
+    const lines = String(value || '').split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i]) fireBeforeInput(input, 'insertText', lines[i]);
+      if (i < lines.length - 1) fireBeforeInput(input, 'insertLineBreak');
     }
   }
 
@@ -912,105 +1029,141 @@
     const value = normalizeDmLineEndings(text);
     try {
       input.focus();
-      input.click();
-      await sleep(140);
+      await sleep(120);
 
       if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
+        await clearComposer(input);
         const proto = input.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
         const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
         if (setter) setter.call(input, value); else input.value = value;
-        dispatchComposerInput(input, value, 'insertFromPaste');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
         input.dispatchEvent(new Event('change', { bubbles: true }));
-        await sleep(220);
+        await sleep(180);
         return insertedTextLooksCorrect(input, value);
       }
 
-      // contenteditable / Facebook Lexical：逐行插入，每个模板换行使用 insertLineBreak。
-      // 旧版一次 execCommand('insertText', 整段文本) 会被 Facebook 合并成一行。
-      try {
-        input.focus();
-        document.execCommand('selectAll', false, null);
-        document.execCommand('delete', false, null);
-        const lines = value.split('\n');
-        for (let i = 0; i < lines.length; i++) {
-          if (lines[i]) document.execCommand('insertText', false, lines[i]);
-          if (i < lines.length - 1) {
-            const ok = document.execCommand('insertLineBreak', false, null);
-            if (!ok) document.execCommand('insertHTML', false, '<br>');
+      const attempts = [
+        async () => {
+          await clearComposer(input);
+          insertLexicalByPaste(input, value);
+        },
+        async () => {
+          await clearComposer(input);
+          insertLexicalByBeforeInputLines(input, value);
+        },
+        async () => {
+          await clearComposer(input);
+          const dt = new DataTransfer();
+          dt.setData('text/plain', value);
+          input.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt }));
+        }
+      ];
+
+      for (const attempt of attempts) {
+        await attempt();
+        await sleep(220);
+        if (insertedTextLooksCorrect(input, value)) return true;
+        if (composerLooksDuplicated(readInputText(input), value)) {
+          await clearComposer(input);
+          await sleep(80);
+          if (composerLooksDuplicated(readInputText(input), value) || readInputText(input)) {
+            return false;
           }
         }
-        dispatchComposerInput(input, value, 'insertFromPaste');
-        await sleep(260);
-        if (insertedTextLooksCorrect(input, value)) return true;
-      } catch (e) { /* fallback */ }
+      }
 
-      // 第二套：一次性插入 HTML，但只用 <br> 表示换行，不引入其他格式。
-      try {
-        input.focus();
-        document.execCommand('selectAll', false, null);
-        document.execCommand('delete', false, null);
-        const html = value.split('\n').map(escapeHtmlForComposer).join('<br>');
-        document.execCommand('insertHTML', false, html);
-        dispatchComposerInput(input, value, 'insertFromPaste');
-        await sleep(260);
-        if (insertedTextLooksCorrect(input, value)) return true;
-      } catch (e) { /* fallback */ }
-
-      // 第三套：直接构造 textNode + BR，再补 input 事件。仅作为 Facebook Lexical 特殊版本的最后写入方案。
-      try {
-        input.replaceChildren();
-        const lines = value.split('\n');
-        lines.forEach((line, idx) => {
-          input.appendChild(document.createTextNode(line));
-          if (idx < lines.length - 1) input.appendChild(document.createElement('br'));
-        });
-        dispatchComposerInput(input, value, 'insertFromPaste');
-        await sleep(260);
-        if (insertedTextLooksCorrect(input, value)) return true;
-      } catch (e) { /* fallback */ }
-
-      // 最后再尝试纯文本粘贴事件；部分 Facebook 版本会接受此路径。
-      try {
-        const dt = new DataTransfer();
-        dt.setData('text/plain', value);
-        input.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt }));
-        await sleep(260);
-        if (insertedTextLooksCorrect(input, value)) return true;
-      } catch (e) { /* fallback */ }
-
-      return false;
+      return insertedTextLooksCorrect(input, value);
     } catch (e) {
       return false;
     }
   }
 
+  function isDisabledControl(el) {
+    if (!el || !(el instanceof Element)) return true;
+    if (el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true') return true;
+    const parent = el.closest('[aria-disabled="true"], [disabled]');
+    if (parent && parent !== el.closest('[role="dialog"], [aria-modal="true"]')) return true;
+    try {
+      if (getComputedStyle(el).pointerEvents === 'none') return true;
+    } catch (e) { /* ignore */ }
+    return false;
+  }
+
+  function isSendButtonLabel(value) {
+    const raw = String(value || '').replace(/\s+/g, ' ').trim();
+    if (!raw || raw.length > 80) return false;
+    const v = normalizeForMatch(raw);
+    if (BACK_WORDS.some(word => looseMatch(raw, word))) return false;
+    if (/发消息给|發消息給|send message to|查看回复|查看回覆/.test(v)) return false;
+    if (SEND_WORDS.some(word => exactishMatch(raw, word) || (word.length > 5 && looseMatch(raw, word)))) return true;
+    // 部分弹层主按钮文案就是「发消息」，但必须是短标签。
+    if (MESSAGE_WORDS.some(word => exactishMatch(raw, word))) return true;
+    return false;
+  }
+
   function findSendButton(dialog, input, privateConfirmed) {
-    const buttons = Array.from(dialog.querySelectorAll('[role="button"], button, span[role="button"], a[role="link"], span, div')).filter(isVisible);
+    if (!dialog || !input) return null;
     const inputRect = input.getBoundingClientRect();
-    const explicit = [];
-
-    for (const node of buttons) {
-      const value = `${getText(node)} ${node.getAttribute('aria-label') || ''} ${node.getAttribute('title') || ''}`.trim();
-      if (!value || value.length > 100) continue;
-      if (BACK_WORDS.some(word => looseMatch(value, word))) continue;
-      if (!SEND_WORDS.some(word => looseMatch(value, word))) continue;
-      const clickable = node.closest('[role="button"], button, a, [tabindex="0"]') || node;
+    const nodes = Array.from(dialog.querySelectorAll('[role="button"], button, [tabindex="0"]')).filter(isVisible);
+    const labeled = [];
+    const seen = new Set();
+    for (const node of nodes) {
+      const clickable = node.closest('[role="button"], button, [tabindex="0"]') || node;
+      if (!clickable || seen.has(clickable) || !dialog.contains(clickable)) continue;
+      seen.add(clickable);
+      const value = controlActionLabel(clickable);
+      if (!isSendButtonLabel(value)) continue;
       const r = clickable.getBoundingClientRect();
-      const distance = Math.abs(r.top - inputRect.bottom) + Math.abs(r.left - inputRect.right);
-      explicit.push({ el: clickable, distance, r });
+      if (r.width < 16 || r.height < 16) continue;
+      const distance = Math.abs(r.top - inputRect.top) + Math.abs(r.left - inputRect.right);
+      labeled.push({ el: clickable, r, distance, area: r.width * r.height, disabled: isDisabledControl(clickable) });
     }
-    explicit.sort((a, b) => a.distance - b.distance || b.r.right - a.r.right);
-    if (explicit[0]) return explicit[0].el;
+    labeled.sort((a, b) => Number(a.disabled) - Number(b.disabled) || a.distance - b.distance || a.area - b.area);
+    if (labeled[0] && !labeled[0].disabled) return labeled[0].el;
 
-    if (!privateConfirmed || !isConfirmedPrivateMessengerDialog(dialog, input)) return null;
-    const dr = dialog.getBoundingClientRect();
-    const fallback = Array.from(dialog.querySelectorAll('[role="button"], button, [tabindex="0"]'))
-      .filter(isVisible)
-      .map(el => ({ el, r: el.getBoundingClientRect(), text: `${getText(el)} ${el.getAttribute('aria-label') || ''}` }))
-      .filter(x => !BACK_WORDS.some(word => exactishMatch(x.text, word)))
-      .filter(x => x.r.width >= 60 && x.r.height >= 26 && x.r.left > dr.left + dr.width * 0.52 && x.r.top > dr.top + dr.height * 0.55)
-      .sort((a, b) => b.r.right - a.r.right || b.r.bottom - a.r.bottom);
-    return fallback[0]?.el || null;
+    if (!privateConfirmed) {
+      return labeled[0] && !labeled[0].disabled ? labeled[0].el : null;
+    }
+
+    const icons = nodes
+      .map(el => {
+        const clickable = el.closest('[role="button"], button, [tabindex="0"]') || el;
+        return { el: clickable, r: clickable.getBoundingClientRect(), text: controlActionLabel(clickable) };
+      })
+      .filter((x, idx, arr) => x.el && arr.findIndex(y => y.el === x.el) === idx)
+      .filter(x => !isDisabledControl(x.el))
+      .filter(x => !BACK_WORDS.some(word => looseMatch(x.text, word)))
+      .filter(x => !/发消息给|發消息給|send message to/.test(normalizeForMatch(x.text)))
+      .filter(x => {
+        const nearY = x.r.top < inputRect.bottom + 28 && x.r.bottom > inputRect.top - 28;
+        const toRight = x.r.left >= inputRect.right - 12;
+        const compact = x.r.width >= 20 && x.r.width <= 72 && x.r.height >= 20 && x.r.height <= 72;
+        return nearY && toRight && compact;
+      })
+      .sort((a, b) => a.r.left - b.r.left || a.r.width - b.r.width);
+    return icons[0]?.el || (labeled[0] && !labeled[0].disabled ? labeled[0].el : null);
+  }
+
+  async function nudgeComposerForSend(input) {
+    if (!input) return;
+    try { input.focus(); } catch (e) { /* ignore */ }
+    try { input.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) { /* ignore */ }
+    try { input.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) { /* ignore */ }
+    fireBeforeInput(input, 'insertText', ' ');
+    await sleep(50);
+    fireBeforeInput(input, 'deleteContentBackward');
+    await sleep(80);
+  }
+
+  async function waitForEnabledSendButton(dialog, input, timeoutMs) {
+    const start = Date.now();
+    let last = null;
+    while (Date.now() - start < timeoutMs) {
+      last = findSendButton(dialog, input, true);
+      if (last && !isDisabledControl(last)) return last;
+      await sleep(180);
+    }
+    return last && !isDisabledControl(last) ? last : last;
   }
 
   async function waitForSendConfirmation(input, dialog, beforeText, timeoutMs, dmText, beforeEchoes, clickedSendButton = null, progressGraceMs = 45000) {
@@ -1095,8 +1248,9 @@
     if (!isConfirmedPrivateMessengerDialog(dialog, input)) return { ok: false, enterDispatched: false };
     try {
       input.focus();
-      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
-      input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+      const enter = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true, composed: true };
+      input.dispatchEvent(new KeyboardEvent('keydown', enter));
+      input.dispatchEvent(new KeyboardEvent('keyup', enter));
       const confirmed = await waitForSendConfirmation(input, dialog, beforeText, timeoutMs, dmText, beforeEchoes, null, progressGraceMs);
       if (confirmed.ok) return { ok: true, enterDispatched: true, verification: 'private_dialog_enter_confirmed' };
       if (confirmed.definiteFailure) return { ok: false, enterDispatched: true, definiteFailure: true, error: confirmed.error };
@@ -1258,28 +1412,31 @@
   function buildCommentSnapshot(row) {
     const rawText = getText(row);
     const lines = splitLines(rawText);
-    const actionLine = (line) => ACTION_WORDS.some(w => looseMatch(line, w)) || /^\.{3}$/.test(line);
+    const actionLine = (line) => ACTION_WORDS.some(w => looseMatch(line, w)) || SHARE_WORDS.some(w => exactishMatch(line, w)) || /^\.{3}$/.test(line) || line === '·' || line === '•';
     const contentLines = lines.filter(line => !actionLine(line));
+
+    const fromAria = parseCommenterAriaLabel(row?.getAttribute?.('aria-label') || '');
+    const fromLink = pickUserNameFromProfileLinks(row);
+    const fromLines = parseUserTimeFromLines(contentLines);
+
+    let userName = (fromAria?.userName || fromLink?.userName || fromLines?.userName || '').trim();
+    let timeText = (fromAria?.timeText || fromLines?.timeText || '').trim();
+    let nameIdx = Number.isInteger(fromLines?.nameIdx) ? fromLines.nameIdx : -1;
+
+    if (!userName) userName = pickLikelyUserName(row, contentLines, '');
+    if (userName && nameIdx < 0) {
+      nameIdx = contentLines.findIndex(line => {
+        const a = normalizeForMatch(line), b = normalizeForMatch(userName);
+        return a === b || a.startsWith(b) || b.startsWith(a);
+      });
+    }
 
     const postMetaIdx = contentLines.findIndex(hasAbsolutePostTime);
     let postTitle = '';
-    if (postMetaIdx > 0) postTitle = contentLines[postMetaIdx - 1] || '';
-    if (!postTitle) postTitle = contentLines[0] || '';
-
-    let userName = '';
-    let timeText = '';
-    let nameIdx = -1;
-    for (let i = 0; i < contentLines.length; i++) {
-      const parsed = parseUserTimeLine(contentLines[i]);
-      if (parsed) {
-        userName = parsed.userName;
-        timeText = parsed.timeText;
-        nameIdx = i;
-        break;
-      }
+    if (postMetaIdx > 0) {
+      const maybe = contentLines[postMetaIdx - 1] || '';
+      if (maybe && normalizeForMatch(maybe) !== normalizeForMatch(userName) && !hasRelativeTime(maybe)) postTitle = maybe;
     }
-
-    if (!userName) userName = pickLikelyUserName(row, contentLines, postTitle);
 
     let commentText = '';
     if (nameIdx >= 0) {
@@ -1287,14 +1444,19 @@
       for (let i = nameIdx + 1; i < contentLines.length && after.length < 4; i++) {
         const line = contentLines[i];
         if (!line || line === postTitle || hasAbsolutePostTime(line) || hasRelativeTime(line)) continue;
+        if (normalizeForMatch(line) === normalizeForMatch(userName)) continue;
         after.push(line);
       }
       commentText = after.join(' ').trim();
     }
     if (!commentText) commentText = pickLikelyCommentText(contentLines, postTitle, userName);
+    if (userName && commentText && normalizeForMatch(userName) === normalizeForMatch(commentText)) {
+      userName = fromAria?.userName || fromLink?.userName || userName;
+      commentText = pickLikelyCommentText(contentLines, postTitle, userName);
+    }
 
     const links = Array.from(row.querySelectorAll('a[href]'));
-    const profileLink = pickProfileLink(links, userName);
+    const profileLink = fromLink?.profileLink || pickProfileLink(links, userName);
     const postUrl = pickPostUrl(links);
     const nativeCommentId = extractNativeCommentId(row, links);
     const userKey = buildUserKey(profileLink, userName, row);
@@ -1362,6 +1524,62 @@
     return null;
   }
 
+  function splitNameAndTime(text) {
+    const t = String(text || '').replace(/\u00a0/g, ' ').trim();
+    if (!t) return { userName: '', timeText: '' };
+    const m = t.match(/^(.*?)((?:约\s*)?\d+(?:\.\d+)?\s*(?:秒|分钟|分鐘|小时|小時|天|周|週|个月|個月|年)|刚刚|剛剛|just now)(\s*前)?$/iu);
+    if (!m) return { userName: t, timeText: '' };
+    return { userName: String(m[1] || '').trim(), timeText: `${m[2] || ''}${m[3] || ''}`.trim() };
+  }
+
+  function parseCommenterAriaLabel(aria) {
+    const raw = String(aria || '').replace(/\u00a0/g, ' ').trim();
+    if (!raw) return null;
+    const m = raw.match(/^(?:评论者|評論者|commenter|comment by)\s*[:：]?\s*(.+)$/i);
+    if (!m) return null;
+    const split = splitNameAndTime(m[1]);
+    if (!looksLikeUserName(split.userName)) return split.timeText ? split : null;
+    return split;
+  }
+
+  function isProfileHref(href) {
+    const h = String(href || '');
+    if (!h) return false;
+    if (/\/professional_dashboard\//i.test(h)) return false;
+    if (/[?&]comment_id=/i.test(h)) return false;
+    if (/\/(posts|reel|reels|videos|permalink|photo|watch|story)\b/i.test(h)) return false;
+    if (/profile\.php\?id=\d+/i.test(h)) return true;
+    if (/\/people\//i.test(h)) return true;
+    if (/\/user\/\d+/i.test(h)) return true;
+    if (/facebook\.com\/(?:profile\.php|people\/)/i.test(h)) return true;
+    return false;
+  }
+
+  function looksLikeUserName(text) {
+    const s = String(text || '').trim();
+    if (s.length < 2 || s.length > 80) return false;
+    if (ACTION_WORDS.some(w => exactishMatch(s, w) || (s.length <= 16 && looseMatch(s, w)))) return false;
+    if (SHARE_WORDS.some(w => exactishMatch(s, w))) return false;
+    if (hasAbsolutePostTime(s) || hasRelativeTime(s)) return false;
+    if (/^https?:/i.test(s)) return false;
+    if (/^[·•\-–—|]+$/.test(s)) return false;
+    if (s.split(/\s+/).length > 8) return false;
+    if (s.length > 42 && /[.!?。！？]/.test(s)) return false;
+    return true;
+  }
+
+  function pickUserNameFromProfileLinks(row) {
+    const links = Array.from(row?.querySelectorAll?.('a[href]') || []).filter(isVisible);
+    for (const a of links) {
+      const href = a.getAttribute('href') || a.href || '';
+      if (!isProfileHref(href)) continue;
+      const t = getText(a).trim();
+      if (!looksLikeUserName(t)) continue;
+      return { userName: t, profileLink: SecurityUtil.sanitizeFacebookHttpsUrl(a.href || href) || href };
+    }
+    return null;
+  }
+
   function parseUserTimeLine(line) {
     const t = String(line || '').trim();
     if (!hasRelativeTime(t)) return null;
@@ -1378,29 +1596,62 @@
     return null;
   }
 
+  function parseUserTimeFromLines(lines) {
+    const list = Array.isArray(lines) ? lines : [];
+    for (let i = 0; i < list.length; i++) {
+      const parsed = parseUserTimeLine(list[i]);
+      if (parsed?.userName) return { ...parsed, nameIdx: i };
+    }
+    for (let i = 0; i < list.length; i++) {
+      const a = list[i];
+      const b = list[i + 1] || '';
+      const c = list[i + 2] || '';
+      if (looksLikeUserName(a) && looksLikeRelativeTimeToken(b)) {
+        return { userName: a, timeText: b, nameIdx: i };
+      }
+      if (looksLikeUserName(a) && looksLikeRelativeTimeToken(c) && /^[·•\-–—]$/.test(b)) {
+        return { userName: a, timeText: c, nameIdx: i };
+      }
+    }
+    return null;
+  }
+
   function pickLikelyUserName(row, lines, postTitle) {
+    const fromLink = pickUserNameFromProfileLinks(row);
+    if (fromLink?.userName) return fromLink.userName;
+    const fromAria = parseCommenterAriaLabel(row?.getAttribute?.('aria-label') || '');
+    if (fromAria?.userName) return fromAria.userName;
+
     const els = Array.from(row.querySelectorAll('strong, b, a[href], span')).filter(isVisible);
     const tryPick = (skipLeftColumn) => {
       for (const el of els) {
         const t = getText(el);
-        if (!t || t === postTitle || t.length < 2 || t.length > 100) continue;
-        if (ACTION_WORDS.some(w => looseMatch(t, w))) continue;
-        if (SHARE_WORDS.some(w => exactishMatch(t, w))) continue;
-        if (hasAbsolutePostTime(t) || hasRelativeTime(t)) continue;
+        if (!t || t === postTitle || !looksLikeUserName(t)) continue;
         const r = el.getBoundingClientRect();
         const rr = row.getBoundingClientRect();
-        if (skipLeftColumn && r.left < rr.left + rr.width * 0.28) continue; // 旧布局：排除左侧贴文标题
+        if (skipLeftColumn && r.left < rr.left + rr.width * 0.28) continue;
         return t;
       }
       return '';
     };
-    // 新布局评论者在左侧、贴文缩略图在右侧；旧布局找不到时再允许左侧名字。
-    return tryPick(true) || tryPick(false);
+    return tryPick(false) || tryPick(true);
   }
 
   function pickLikelyCommentText(lines, postTitle, userName) {
-    const filtered = lines.filter(line => line !== postTitle && line !== userName && !hasAbsolutePostTime(line) && !hasRelativeTime(line));
+    const filtered = lines.filter(line => {
+      if (!line || line === postTitle) return false;
+      if (userName && normalizeForMatch(line) === normalizeForMatch(userName)) return false;
+      if (hasAbsolutePostTime(line) || hasRelativeTime(line)) return false;
+      return true;
+    });
     if (!filtered.length) return '';
+    if (userName) {
+      const idx = lines.findIndex(line => normalizeForMatch(line) === normalizeForMatch(userName));
+      if (idx >= 0) {
+        const after = filtered.filter(line => lines.indexOf(line) > idx);
+        if (after[0]) return after[0];
+      }
+    }
     return filtered[filtered.length - 1] || '';
   }
 
@@ -1478,13 +1729,13 @@
 
   function pickProfileLink(links, userName) {
     for (const a of links || []) {
-      const href = SecurityUtil.sanitizeFacebookHttpsUrl(a.href || '');
+      const href = SecurityUtil.sanitizeFacebookHttpsUrl(a.href || a.getAttribute?.('href') || '');
       if (!href) continue;
       const text = getText(a);
       if (/\/professional_dashboard\//i.test(href)) continue;
       if (/\/(posts|reel|videos|permalink|story)\b/i.test(href)) continue;
       if (userName && text && normalizeForMatch(text) === normalizeForMatch(userName)) return href;
-      if (/profile\.php\?id=\d+/.test(href) || /facebook\.com\/people\//.test(href)) return href;
+      if (isProfileHref(href)) return href;
     }
     return '';
   }
@@ -1682,8 +1933,9 @@
     } catch (e) { /* ignore */ }
   }
 
-  function safeClick(el) {
+  function safeClick(el, options = {}) {
     if (!el) return;
+    const mode = options.mode || 'press';
     const clickable = el.closest?.('[role="button"], button, a, [tabindex="0"]') || el;
     try { clickable.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' }); } catch (e) { /* ignore */ }
     hoverElement(clickable);
@@ -1701,6 +1953,13 @@
       if (topEl && (clickable === topEl || clickable.contains(topEl))) target = topEl;
     } catch (e) { /* ignore */ }
     try {
+      if (mode === 'click') {
+        // 弹层里的发送按钮走原生 click。pointerup+click 叠在一起会连发两条；只 pointer 又经常点不动。
+        target.dispatchEvent(new MouseEvent('mousedown', mouse));
+        target.dispatchEvent(new MouseEvent('mouseup', { ...mouse, buttons: 0 }));
+        target.click();
+        return;
+      }
       if (typeof PointerEvent === 'function') {
         const p = { ...mouse, pointerId: 1, pointerType: 'mouse', isPrimary: true, width: 1, height: 1, pressure: 0.5 };
         target.dispatchEvent(new PointerEvent('pointerdown', p));
@@ -1711,8 +1970,8 @@
       } else {
         target.dispatchEvent(new MouseEvent('mousedown', mouse));
         target.dispatchEvent(new MouseEvent('mouseup', { ...mouse, buttons: 0 }));
+        target.click();
       }
-      target.click();
     } catch (e) {
       try { clickable.click(); } catch (e2) { /* ignore */ }
     }
