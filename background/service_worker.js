@@ -486,6 +486,11 @@ async function claimComment(task, senderTabId) {
   const templates = getAllTemplates(rules);
   if (!templates.length) return { status: 'NO_TEMPLATE' };
 
+  const safeName = sanitizeCommenterName(task.userName);
+  if (safeName && safeName !== task.userName) {
+    task = { ...task, userName: safeName };
+  }
+
   const reserve = await StorageUtil.reserveTask({ ...task, workerTabId: senderTabId, workerSlot: slot });
   if (!reserve.ok) return { status: reserve.reason || 'RESERVE_FAILED' };
   await StorageUtil.bindWorkerTab(task.commentKey, senderTabId);
@@ -960,8 +965,18 @@ function getAllTemplates(rules) {
   return out;
 }
 
+function sanitizeCommenterName(name) {
+  const t = String(name || '').replace(/\u00a0/g, ' ').normalize('NFKC').trim();
+  if (!t) return '';
+  const cleaned = t
+    .replace(/[\s·•\-–—]*((?:约\s*|約\s*)?(?:\d+(?:\.\d+)?|几|幾|a\s+few)\s*(?:秒|秒钟|秒鐘|分钟|分鐘|分|小时|小時|时|時|天|日|周|週|星期|个月|個月|月|年|seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?)(?:\s*(?:前|ago))?|刚刚|剛剛|just now)\s*$/i, '')
+    .replace(/[\s·•\-–—]+$/g, '')
+    .trim();
+  return cleaned;
+}
+
 function renderTemplate(template, task) {
-  const full = String(task?.userName || '').trim();
+  const full = sanitizeCommenterName(task?.userName || '');
   const first = full.split(/\s+/).filter(Boolean)[0] || full;
   const commentText = String(task?.commentText || '');
   const postTitle = String(task?.postTitle || '');

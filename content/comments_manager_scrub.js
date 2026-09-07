@@ -8,12 +8,13 @@
  *
  * v2.12.2：兼容评论管理工具新 DOM（role=article 评论行、html-li 内 div[role=button]「发消息」、
  * 点击后打开 docked Messenger 聊天窗而不是旧的 “通过 Messenger 回复” dialog）。旧结构识别逻辑保留。
+ * v2.12.3：拆开粘在用户名后的相对时间（几秒前/幾分鐘前/a few seconds ago），避免私信模板带上中文时间。
  */
 
 (() => {
   'use strict';
 
-  const VERSION = '2.12.2';
+  const VERSION = '1.0.3';
   const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
   function setStatusMessage(message) {
@@ -1310,7 +1311,7 @@
     if (/评论者|評論者|commenter|comment by|komentarisao|komentirao/i.test(aria)) return true;
     const lines = splitLines(getText(el));
     if (lines.length < 2 || lines.length > 40) return false;
-    const hasTime = lines.some(hasRelativeTime) || hasRelativeTime(aria) || /小时前|小時前|分钟前|分鐘前|天前|刚刚|剛剛/.test(aria);
+    const hasTime = lines.some(hasRelativeTime) || hasRelativeTime(aria) || /秒前|小时前|小時前|分钟前|分鐘前|天前|刚刚|剛剛|几秒|幾秒/.test(aria);
     const hasReply = lines.some(line => REPLY_WORDS.some(w => exactishMatch(line, w) || (line.length <= 16 && looseMatch(line, w))));
     const hasMsg = lines.some(line => MESSAGE_WORDS.some(w => exactishMatch(line, w)));
     const hasHide = HIDE_WORDS.some(w => looseMatch(aria, w)) || lines.some(line => HIDE_WORDS.some(w => looseMatch(line, w)));
@@ -1424,6 +1425,11 @@
     let nameIdx = Number.isInteger(fromLines?.nameIdx) ? fromLines.nameIdx : -1;
 
     if (!userName) userName = pickLikelyUserName(row, contentLines, '');
+    {
+      const cleaned = splitNameAndTime(userName);
+      if (cleaned.userName) userName = cleaned.userName;
+      if (cleaned.timeText && !timeText) timeText = cleaned.timeText;
+    }
     if (userName && nameIdx < 0) {
       nameIdx = contentLines.findIndex(line => {
         const a = normalizeForMatch(line), b = normalizeForMatch(userName);
@@ -1454,6 +1460,11 @@
       userName = fromAria?.userName || fromLink?.userName || userName;
       commentText = pickLikelyCommentText(contentLines, postTitle, userName);
     }
+    {
+      const cleaned = splitNameAndTime(userName);
+      if (cleaned.userName) userName = cleaned.userName;
+      if (cleaned.timeText && !timeText) timeText = cleaned.timeText;
+    }
 
     const links = Array.from(row.querySelectorAll('a[href]'));
     const profileLink = fromLink?.profileLink || pickProfileLink(links, userName);
@@ -1482,12 +1493,20 @@
     };
   }
 
+  const RELATIVE_TIME_UNITS = '秒钟|秒鐘|秒|分钟|分鐘|分|小时|小時|时|時|个月|個月|月|星期|天|日|周|週|年|seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?|sec|min|hr|wk|mo|yr|s|m|h|d|w|y';
+  const RELATIVE_TIME_QTY = '(?:约\\s*|約\\s*)?(?:\\d+(?:\\.\\d+)?|几|幾|a\\s+few)';
+  const RELATIVE_TIME_NAMED = '刚刚|剛剛|just now|今天|昨天|前天|today|yesterday|danas|juče|juce|upravo sada';
+  const RELATIVE_TIME_EXPR = `(?:${RELATIVE_TIME_QTY}\\s*(?:${RELATIVE_TIME_UNITS})(?:\\s*(?:前|ago))?|${RELATIVE_TIME_NAMED}|周[一二三四五六日天]|星期[一二三四五六日天]|\\d{1,2}月\\d{1,2}日)`;
+  const RELATIVE_TIME_TOKEN_RE = new RegExp(`^${RELATIVE_TIME_EXPR}$`, 'i');
+  const NAME_TIME_SPLIT_RE = new RegExp(`^(.*?)[\\s·•\\-–—]*?(${RELATIVE_TIME_EXPR})$`, 'i');
+
   function parseRelativeAgeMs(text) {
-    const raw = normalizeForMatch(text).replace(/^约\s*/, '').replace(/前$/, '').trim();
+    const raw = normalizeForMatch(text).replace(/^约\s*|^約\s*/, '').replace(/(?:前|ago)$/i, '').replace(/^(?:几|幾|a\s+few)(?=\s*[\p{L}\u4e00-\u9fff])/u, '3').trim();
     if (!raw) return null;
     if (['刚刚', '剛剛', 'just now', 'upravo sada', 'sada'].includes(raw)) return 0;
     if (['今天', 'today', 'danas'].includes(raw)) return 6 * 60 * 60 * 1000;
     if (['昨天', 'yesterday', 'juče', 'juce'].includes(raw)) return 24 * 60 * 60 * 1000;
+    if (['前天'].includes(raw)) return 2 * 24 * 60 * 60 * 1000;
 
     const weekdayMap = { '周日': 0, '周天': 0, '星期日': 0, '星期天': 0, '周一': 1, '星期一': 1, '周二': 2, '星期二': 2, '周三': 3, '星期三': 3, '周四': 4, '星期四': 4, '周五': 5, '星期五': 5, '周六': 6, '星期六': 6 };
     if (Object.prototype.hasOwnProperty.call(weekdayMap, raw)) {
@@ -1525,11 +1544,15 @@
   }
 
   function splitNameAndTime(text) {
-    const t = String(text || '').replace(/\u00a0/g, ' ').trim();
+    const t = String(text || '').replace(/\u00a0/g, ' ').normalize('NFKC').trim();
     if (!t) return { userName: '', timeText: '' };
-    const m = t.match(/^(.*?)((?:约\s*)?\d+(?:\.\d+)?\s*(?:秒|分钟|分鐘|小时|小時|天|周|週|个月|個月|年)|刚刚|剛剛|just now)(\s*前)?$/iu);
+    if (RELATIVE_TIME_TOKEN_RE.test(t)) return { userName: '', timeText: t };
+    const m = t.match(NAME_TIME_SPLIT_RE);
     if (!m) return { userName: t, timeText: '' };
-    return { userName: String(m[1] || '').trim(), timeText: `${m[2] || ''}${m[3] || ''}`.trim() };
+    const userName = String(m[1] || '').replace(/[\s·•\-–—]+$/g, '').trim();
+    const timeText = String(m[2] || '').trim();
+    if (!userName || !timeText) return { userName: t, timeText: '' };
+    return { userName, timeText };
   }
 
   function parseCommenterAriaLabel(aria) {
@@ -1560,7 +1583,8 @@
     if (s.length < 2 || s.length > 80) return false;
     if (ACTION_WORDS.some(w => exactishMatch(s, w) || (s.length <= 16 && looseMatch(s, w)))) return false;
     if (SHARE_WORDS.some(w => exactishMatch(s, w))) return false;
-    if (hasAbsolutePostTime(s) || hasRelativeTime(s)) return false;
+    if (hasAbsolutePostTime(s) || hasRelativeTime(s) || looksLikeRelativeTimeToken(s)) return false;
+    if (splitNameAndTime(s).timeText) return false;
     if (/^https?:/i.test(s)) return false;
     if (/^[·•\-–—|]+$/.test(s)) return false;
     if (s.split(/\s+/).length > 8) return false;
@@ -1574,8 +1598,9 @@
       const href = a.getAttribute('href') || a.href || '';
       if (!isProfileHref(href)) continue;
       const t = getText(a).trim();
-      if (!looksLikeUserName(t)) continue;
-      return { userName: t, profileLink: SecurityUtil.sanitizeFacebookHttpsUrl(a.href || href) || href };
+      const name = splitNameAndTime(t).userName || t;
+      if (!looksLikeUserName(name)) continue;
+      return { userName: name, profileLink: SecurityUtil.sanitizeFacebookHttpsUrl(a.href || href) || href };
     }
     return null;
   }
@@ -1590,8 +1615,12 @@
       const left = t.slice(0, idx).trim();
       const right = t.slice(idx + sep.length).trim();
       if (left.length >= 2 && left.length <= 120 && looksLikeRelativeTimeToken(right)) {
-        return { userName: left, timeText: right };
+        return { userName: splitNameAndTime(left).userName || left, timeText: right };
       }
+    }
+    const split = splitNameAndTime(t);
+    if (split.userName && split.timeText && looksLikeUserName(split.userName)) {
+      return { userName: split.userName, timeText: split.timeText };
     }
     return null;
   }
@@ -1626,11 +1655,12 @@
     const tryPick = (skipLeftColumn) => {
       for (const el of els) {
         const t = getText(el);
-        if (!t || t === postTitle || !looksLikeUserName(t)) continue;
+        const name = splitNameAndTime(t).userName || t;
+        if (!name || name === postTitle || !looksLikeUserName(name)) continue;
         const r = el.getBoundingClientRect();
         const rr = row.getBoundingClientRect();
         if (skipLeftColumn && r.left < rr.left + rr.width * 0.28) continue;
-        return t;
+        return name;
       }
       return '';
     };
@@ -1802,14 +1832,16 @@
   }
 
   function looksLikeRelativeTimeToken(text) {
-    const t = normalizeForMatch(text).replace(/^约\s*/, '').replace(/前$/, '').trim();
-    return /^(?:\d+\s*(?:秒|分钟|分鐘|小时|小時|天|周|週|个月|個月|年|s|sec|m|min|h|hr|d|day|w|week|mo|month|y|year)|刚刚|剛剛|just now|今天|昨天|today|yesterday|danas|juče|juce|周[一二三四五六日天]|星期[一二三四五六日天]|\d{1,2}月\d{1,2}日)$/i.test(t);
+    const t = normalizeForMatch(text);
+    return !!t && RELATIVE_TIME_TOKEN_RE.test(t);
   }
 
   function hasRelativeTime(text) {
-    const t = String(text || '').trim();
+    const t = String(text || '').replace(/\u00a0/g, ' ').normalize('NFKC').trim();
+    if (!t) return false;
     if (looksLikeRelativeTimeToken(t)) return true;
-    return /(?:^|[·•\-–—]\s*)(\d+\s*(?:秒|分钟|分鐘|小时|小時|天|周|週|个月|個月|年|s|sec|m|min|h|hr|d|day|w|week|mo|month|y|year))\s*$/i.test(t);
+    if (/(?:^|[·•\-–—]\s*)(?:约\s*|約\s*)?(?:\d+(?:\.\d+)?|几|幾)\s*(?:秒|分钟|分鐘|小时|小時|天|周|週|个月|個月|年)\s*前?\s*$/i.test(t)) return true;
+    return /(?:约\s*|約\s*)?(?:\d+(?:\.\d+)?|几|幾)\s*(?:秒钟|秒鐘|秒|分钟|分鐘|分|小时|小時|时|時|天|日|周|週|星期|个月|個月|月|年)\s*前\s*$/.test(t);
   }
 
   function checkEmergencyBrake(settings) {
