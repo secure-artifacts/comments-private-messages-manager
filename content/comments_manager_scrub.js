@@ -9,6 +9,7 @@
  * v2.12.2：兼容评论管理工具新 DOM（role=article 评论行、html-li 内 div[role=button]「发消息」、
  * 点击后打开 docked Messenger 聊天窗而不是旧的 “通过 Messenger 回复” dialog）。旧结构识别逻辑保留。
  * v2.12.3：拆开粘在用户名后的相对时间（几秒前/幾分鐘前/a few seconds ago），避免私信模板带上中文时间。
+ * v2.12.4：发送前不再无条件模拟 Backspace。Lexical 常忽略插入空格却执行删除，导致发出去少最后一个字母。
  */
 
 (() => {
@@ -608,7 +609,10 @@
       return { ok: false, error: 'Messenger 私信框写入了重复内容，已中止以免发出两遍' };
     }
 
-    await nudgeComposerForSend(input);
+    await nudgeComposerForSend(input, dmText);
+    if (!insertedTextLooksCorrect(input, dmText)) {
+      await injectText(input, dmText);
+    }
     await sleep(280);
     const beforeText = readInputText(input);
     const beforeEchoes = captureMessageEchoes(dialog, input);
@@ -1145,15 +1149,59 @@
     return icons[0]?.el || (labeled[0] && !labeled[0].disabled ? labeled[0].el : null);
   }
 
-  async function nudgeComposerForSend(input) {
+  function placeCaretAtEnd(input) {
+    if (!input) return;
+    try {
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(input);
+      range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } catch (e) { /* ignore */ }
+  }
+
+  function readInputTextRaw(input) {
+    if (!input) return '';
+    if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
+      return normalizeDmLineEndings(String(input.value || ''));
+    }
+    const inner = typeof input.innerText === 'string' ? input.innerText : '';
+    if (inner) return normalizeDmLineEndings(inner);
+    return normalizeDmLineEndings(String(input.textContent || ''));
+  }
+
+  async function restoreComposerIfTruncated(input, expectedText) {
+    const expected = composerTextForCompare(expectedText);
+    const actual = composerTextForCompare(readInputText(input));
+    if (!expected || actual === expected) return;
+    if (!expected.startsWith(actual) || expected.length > actual.length + 4) return;
+    const missing = expected.slice(actual.length);
+    if (!missing) return;
+    placeCaretAtEnd(input);
+    fireBeforeInput(input, 'insertText', missing);
+    await sleep(50);
+  }
+
+  async function nudgeComposerForSend(input, expectedText) {
     if (!input) return;
     try { input.focus(); } catch (e) { /* ignore */ }
+    placeCaretAtEnd(input);
     try { input.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) { /* ignore */ }
     try { input.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) { /* ignore */ }
-    fireBeforeInput(input, 'insertText', ' ');
-    await sleep(50);
-    fireBeforeInput(input, 'deleteContentBackward');
-    await sleep(80);
+
+    // 以前用「插入空格再 Backspace」唤醒发送按钮。Messenger/Lexical 经常不写入这个空格，
+    // 却照样处理 deleteContentBackward，于是把正文最后一个字母删掉。
+    const before = readInputTextRaw(input);
+    fireBeforeInput(input, 'insertText', '\u200b');
+    await sleep(40);
+    const afterInsert = readInputTextRaw(input);
+    if (afterInsert.includes('\u200b') || afterInsert.length > before.length) {
+      fireBeforeInput(input, 'deleteContentBackward');
+      await sleep(40);
+    }
+    await restoreComposerIfTruncated(input, expectedText || before);
+    await sleep(40);
   }
 
   async function waitForEnabledSendButton(dialog, input, timeoutMs) {
