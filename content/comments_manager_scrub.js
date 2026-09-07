@@ -10,6 +10,7 @@
  * 点击后打开 docked Messenger 聊天窗而不是旧的 “通过 Messenger 回复” dialog）。旧结构识别逻辑保留。
  * v2.12.3：拆开粘在用户名后的相对时间（几秒前/幾分鐘前/a few seconds ago），避免私信模板带上中文时间。
  * v2.12.4：发送前不再无条件模拟 Backspace。Lexical 常忽略插入空格却执行删除，导致发出去少最后一个字母。
+ * v2.12.5：补齐繁体中文界面（發送訊息、3小時、留言管理工具、透過 Messenger、週一～週日）。
  */
 
 (() => {
@@ -23,45 +24,45 @@
   }
 
   const MESSAGE_WORDS = [
-    '发消息', '發消息', '发送消息', '發送訊息', '傳送訊息',
+    '发消息', '發消息', '发送消息', '發送訊息', '傳送訊息', '發訊息', '傳訊息',
     'Send message', 'Message', 'Pošalji poruku', 'Pošalji',
     'Enviar mensagem', 'Enviar mensaje', 'Envoyer un message'
   ];
   const REPLY_WORDS = ['回复', '回覆', 'Reply', 'Odgovori', 'Responder', 'Répondre'];
-  const VIEW_REPLY_WORDS = ['查看回复', '查看回覆', 'View replies', 'View reply', 'Prikaži odgovore', 'Pogledaj odgovore'];
+  const VIEW_REPLY_WORDS = ['查看回复', '查看回覆', '查看留言', 'View replies', 'View reply', 'Prikaži odgovore', 'Pogledaj odgovore'];
   const HIDE_WORDS = ['隐藏', '隱藏', 'Hide', 'Sakrij', 'Ocultar', 'Masquer'];
   const SEND_WORDS = [
-    '发送', '發送', '传送', '傳送',
+    '发送', '發送', '传送', '傳送', '送出',
     'Send', 'Pošalji', 'Enviar', 'Envoyer',
-    '按 Enter 发送', '按 Enter 發送', 'Press Enter to send'
+    '按 Enter 发送', '按 Enter 發送', '按 Enter 傳送', '按 Enter 鍵傳送', 'Press Enter to send'
   ];
   const BACK_WORDS = [
-    '返回评论', '返回評論', '返回', 'Back to comment', 'Back', 'Nazad',
+    '返回评论', '返回評論', '返回留言', '返回', 'Back to comment', 'Back', 'Nazad',
     '关闭', '關閉', 'Close', 'Zatvori', '取消', 'Cancel', 'Otkaži'
   ];
   const SHARE_WORDS = ['分享', 'Share', 'Podeli', 'Compartir', 'Partager'];
   const PRIVATE_DIALOG_WORDS = [
-    '通过 Messenger 回复', '通過 Messenger 回覆', 'Reply via Messenger',
+    '通过 Messenger 回复', '通過 Messenger 回覆', '透過 Messenger 回覆', 'Reply via Messenger',
     'Reply through Messenger', 'Respond via Messenger', 'Odgovori putem Messengera',
     'Odgovori preko Messengera',
-    '发消息给', '發消息給', '发送消息给', '發送訊息給', 'Send message to',
+    '发消息给', '發消息給', '发送消息给', '發送訊息給', '傳送訊息給', '發訊息給', 'Send message to',
     '在 Messenger 悄悄回复', '在 Messenger 悄悄回覆', 'privately in Messenger',
     'Pošalji poruku', 'Pošalji poruku korisniku',
-    '按 Enter 发送', '按 Enter 發送', 'Press Enter to send'
+    '按 Enter 发送', '按 Enter 發送', '按 Enter 傳送', 'Press Enter to send'
   ];
   const MESSENGER_COMPOSER_LABELS = [
-    'aa', '发消息', '發消息', '写消息', '寫訊息', '输入消息', '輸入訊息',
+    'aa', '发消息', '發消息', '發訊息', '傳訊息', '写消息', '寫訊息', '输入消息', '輸入訊息',
     'message', 'send a message', 'poruka'
   ];
   const STOP_WORDS = [
-    '验证码', '安全检查', 'Security Check Required', 'Security check',
+    '验证码', '安全检查', '驗證碼', '安全檢查', 'Security Check Required', 'Security check',
     "You're Temporarily Blocked", 'Action Blocked', '您已被限制使用此功能',
-    '你的账户暂时受到限制', '账号受到限制', '帳號受到限制',
+    '你的账户暂时受到限制', '你的帳戶暫時受到限制', '账号受到限制', '帳號受到限制',
     'Confirm your identity', 'Potvrdite svoj identitet'
   ];
   const ACTION_WORDS = [...MESSAGE_WORDS, ...REPLY_WORDS, ...VIEW_REPLY_WORDS, ...HIDE_WORDS];
-  const ALL_COMMENTS_WORDS = ['所有评论', '所有評論', 'All comments', 'Svi komentari'];
-  const UNREPLIED_WORDS = ['你未回复', '你未回覆', '未回复', '未回覆', "You haven't replied", 'Not replied', 'Niste odgovorili'];
+  const ALL_COMMENTS_WORDS = ['所有评论', '所有評論', '所有留言', '全部留言', 'All comments', 'Svi komentari'];
+  const UNREPLIED_WORDS = ['你未回复', '你未回覆', '你尚未回覆', '未回复', '未回覆', '尚未回覆', "You haven't replied", 'Not replied', 'Niste odgovorili'];
   const REPLIED_WORDS = ['你已回复', '你已回覆', '已回复', '已回覆', 'You replied', 'Replied', 'Odgovorili ste'];
 
   let monitorPromise = null;
@@ -759,7 +760,7 @@
   function isPublicCommentComposer(input) {
     if (!input) return false;
     const label = normalizeForMatch(`${input.getAttribute('aria-label') || ''} ${input.getAttribute('placeholder') || ''} ${input.getAttribute('aria-placeholder') || ''}`);
-    return /写评论|寫評論|write a comment|write a reply|leave a comment|公开评论|公開評論|comment as/.test(label);
+    return /写评论|寫評論|写留言|寫留言|write a comment|write a reply|leave a comment|公开评论|公開評論|公開留言|comment as/.test(label);
   }
 
   function isInsideCommentArticle(el) {
@@ -800,12 +801,12 @@
     if (isMessengerComposerInput(input)) return true;
     const aria = normalizeForMatch(`${surface?.getAttribute?.('aria-label') || ''} ${getText(surface).slice(0, 600)}`);
     if (PRIVATE_DIALOG_WORDS.some(word => aria.includes(normalizeForMatch(word)))) return true;
-    if (/发消息给|發消息給|新消息|通过 messenger|reply via messenger/.test(aria)) return true;
+    if (/发消息给|發消息給|發送訊息給|傳送訊息給|發訊息給|新消息|新訊息|通过 messenger|透過 messenger|reply via messenger/.test(aria)) return true;
     const buttons = Array.from(surface.querySelectorAll('[role="button"], button')).filter(isVisible);
     for (const b of buttons) {
       const v = normalizeForMatch(`${b.getAttribute('aria-label') || ''} ${getText(b)}`);
       if (!v || v.length > 60) continue;
-      if (/按 enter 发送|按 enter 發送|press enter to send/.test(v)) return true;
+      if (/按 enter 发送|按 enter 發送|按 enter 傳送|press enter to send/.test(v)) return true;
     }
     return false;
   }
@@ -822,7 +823,7 @@
     if (PRIVATE_DIALOG_WORDS.some(word => text.includes(normalizeForMatch(word)))) return true;
 
     const hasMessenger = text.includes('messenger');
-    const hasReplyContext = text.includes('回复') || text.includes('回覆') || text.includes('reply') || text.includes('private') || text.includes('悄悄') || text.includes('odgovori') || text.includes('poruku');
+    const hasReplyContext = text.includes('回复') || text.includes('回覆') || text.includes('留言') || text.includes('reply') || text.includes('private') || text.includes('悄悄') || text.includes('odgovori') || text.includes('poruku');
     if (hasMessenger && hasReplyContext) return true;
     if (isMessengerComposerInput(input || findComposerInSurface(surface))) return true;
     return isCompactChatPanel(surface) && hasMessengerChrome(surface, input || findComposerInSurface(surface));
@@ -867,7 +868,7 @@
   function findVisiblePrivateReplySurface(beforeInputs = new Set(), options = {}) {
     const afterMessageClick = !!options.afterMessageClick;
     const modalCandidates = Array.from(document.querySelectorAll(
-      '[role="dialog"], [aria-modal="true"], [aria-label*="发消息给"], [aria-label*="發消息給"], [aria-label*="新消息"], [aria-label*="Send message to"]'
+      '[role="dialog"], [aria-modal="true"], [aria-label*="发消息给"], [aria-label*="發消息給"], [aria-label*="發送訊息給"], [aria-label*="傳送訊息給"], [aria-label*="新消息"], [aria-label*="新訊息"], [aria-label*="Send message to"]'
     )).filter(isVisible);
     for (const surface of modalCandidates) {
       const input = findComposerInSurface(surface);
@@ -1099,7 +1100,7 @@
     if (!raw || raw.length > 80) return false;
     const v = normalizeForMatch(raw);
     if (BACK_WORDS.some(word => looseMatch(raw, word))) return false;
-    if (/发消息给|發消息給|send message to|查看回复|查看回覆/.test(v)) return false;
+    if (/发消息给|發消息給|發送訊息給|傳送訊息給|發訊息給|send message to|查看回复|查看回覆|查看留言/.test(v)) return false;
     if (SEND_WORDS.some(word => exactishMatch(raw, word) || (word.length > 5 && looseMatch(raw, word)))) return true;
     // 部分弹层主按钮文案就是「发消息」，但必须是短标签。
     if (MESSAGE_WORDS.some(word => exactishMatch(raw, word))) return true;
@@ -1138,7 +1139,7 @@
       .filter((x, idx, arr) => x.el && arr.findIndex(y => y.el === x.el) === idx)
       .filter(x => !isDisabledControl(x.el))
       .filter(x => !BACK_WORDS.some(word => looseMatch(x.text, word)))
-      .filter(x => !/发消息给|發消息給|send message to/.test(normalizeForMatch(x.text)))
+      .filter(x => !/发消息给|發消息給|發送訊息給|傳送訊息給|發訊息給|send message to/.test(normalizeForMatch(x.text)))
       .filter(x => {
         const nearY = x.r.top < inputRect.bottom + 28 && x.r.bottom > inputRect.top - 28;
         const toRight = x.r.left >= inputRect.right - 12;
@@ -1218,10 +1219,10 @@
   async function waitForSendConfirmation(input, dialog, beforeText, timeoutMs, dmText, beforeEchoes, clickedSendButton = null, progressGraceMs = 45000) {
     const start = Date.now();
     const baseline = String(beforeText || '').trim();
-    const sentWords = ['消息已发送', '已发送', 'Message sent', 'Sent', 'Poruka je poslata', 'Poslato', 'Envoyé', 'Enviado'];
-    const sendingWords = ['正在发送', '正在發送', '发送中', '傳送中', 'Sending', 'Sending…', 'Šalje se', 'Salje se', 'Slanje'];
+    const sentWords = ['消息已发送', '已发送', '訊息已傳送', '已傳送', '已送出', 'Message sent', 'Sent', 'Poruka je poslata', 'Poslato', 'Envoyé', 'Enviado'];
+    const sendingWords = ['正在发送', '正在發送', '正在傳送', '发送中', '傳送中', 'Sending', 'Sending…', 'Šalje se', 'Salje se', 'Slanje'];
     const failWords = [
-      '发送失败', '未能发送', '无法发送', '重试',
+      '发送失败', '發送失敗', '傳送失敗', '未能发送', '无法发送', '無法傳送', '重试', '重試',
       'Failed to send', "Couldn't send", 'Could not send', 'Try again', 'Something went wrong',
       'Nije poslato', 'Slanje nije uspelo', 'Pokušaj ponovo', 'Pokusaj ponovo', 'Greška', 'Greska'
     ];
@@ -1356,10 +1357,10 @@
   function isCommentArticle(el) {
     if (!el || el.getAttribute('role') !== 'article') return false;
     const aria = String(el.getAttribute('aria-label') || '');
-    if (/评论者|評論者|commenter|comment by|komentarisao|komentirao/i.test(aria)) return true;
+    if (/评论者|評論者|留言者|commenter|comment by|komentarisao|komentirao/i.test(aria)) return true;
     const lines = splitLines(getText(el));
     if (lines.length < 2 || lines.length > 40) return false;
-    const hasTime = lines.some(hasRelativeTime) || hasRelativeTime(aria) || /秒前|小时前|小時前|分钟前|分鐘前|天前|刚刚|剛剛|几秒|幾秒/.test(aria);
+    const hasTime = lines.some(hasRelativeTime) || hasRelativeTime(aria) || /秒前|小时前|小時前|分钟前|分鐘前|天前|刚刚|剛剛|几秒|幾秒|小時|分鐘/.test(aria);
     const hasReply = lines.some(line => REPLY_WORDS.some(w => exactishMatch(line, w) || (line.length <= 16 && looseMatch(line, w))));
     const hasMsg = lines.some(line => MESSAGE_WORDS.some(w => exactishMatch(line, w)));
     const hasHide = HIDE_WORDS.some(w => looseMatch(aria, w)) || lines.some(line => HIDE_WORDS.some(w => looseMatch(line, w)));
@@ -1544,7 +1545,7 @@
   const RELATIVE_TIME_UNITS = '秒钟|秒鐘|秒|分钟|分鐘|分|小时|小時|时|時|个月|個月|月|星期|天|日|周|週|年|seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?|sec|min|hr|wk|mo|yr|s|m|h|d|w|y';
   const RELATIVE_TIME_QTY = '(?:约\\s*|約\\s*)?(?:\\d+(?:\\.\\d+)?|几|幾|a\\s+few)';
   const RELATIVE_TIME_NAMED = '刚刚|剛剛|just now|今天|昨天|前天|today|yesterday|danas|juče|juce|upravo sada';
-  const RELATIVE_TIME_EXPR = `(?:${RELATIVE_TIME_QTY}\\s*(?:${RELATIVE_TIME_UNITS})(?:\\s*(?:前|ago))?|${RELATIVE_TIME_NAMED}|周[一二三四五六日天]|星期[一二三四五六日天]|\\d{1,2}月\\d{1,2}日)`;
+  const RELATIVE_TIME_EXPR = `(?:${RELATIVE_TIME_QTY}\\s*(?:${RELATIVE_TIME_UNITS})(?:\\s*(?:前|ago))?|${RELATIVE_TIME_NAMED}|周[一二三四五六日天]|週[一二三四五六日天]|星期[一二三四五六日天]|\\d{1,2}月\\d{1,2}日)`;
   const RELATIVE_TIME_TOKEN_RE = new RegExp(`^${RELATIVE_TIME_EXPR}$`, 'i');
   const NAME_TIME_SPLIT_RE = new RegExp(`^(.*?)[\\s·•\\-–—]*?(${RELATIVE_TIME_EXPR})$`, 'i');
 
@@ -1556,7 +1557,7 @@
     if (['昨天', 'yesterday', 'juče', 'juce'].includes(raw)) return 24 * 60 * 60 * 1000;
     if (['前天'].includes(raw)) return 2 * 24 * 60 * 60 * 1000;
 
-    const weekdayMap = { '周日': 0, '周天': 0, '星期日': 0, '星期天': 0, '周一': 1, '星期一': 1, '周二': 2, '星期二': 2, '周三': 3, '星期三': 3, '周四': 4, '星期四': 4, '周五': 5, '星期五': 5, '周六': 6, '星期六': 6 };
+    const weekdayMap = { '周日': 0, '周天': 0, '週日': 0, '週天': 0, '星期日': 0, '星期天': 0, '周一': 1, '週一': 1, '星期一': 1, '周二': 2, '週二': 2, '星期二': 2, '周三': 3, '週三': 3, '星期三': 3, '周四': 4, '週四': 4, '星期四': 4, '周五': 5, '週五': 5, '星期五': 5, '周六': 6, '週六': 6, '星期六': 6 };
     if (Object.prototype.hasOwnProperty.call(weekdayMap, raw)) {
       const today = new Date().getDay();
       const diff = (today - weekdayMap[raw] + 7) % 7;
@@ -1606,7 +1607,7 @@
   function parseCommenterAriaLabel(aria) {
     const raw = String(aria || '').replace(/\u00a0/g, ' ').trim();
     if (!raw) return null;
-    const m = raw.match(/^(?:评论者|評論者|commenter|comment by)\s*[:：]?\s*(.+)$/i);
+    const m = raw.match(/^(?:评论者|評論者|留言者|commenter|comment by)\s*[:：]?\s*(.+)$/i);
     if (!m) return null;
     const split = splitNameAndTime(m[1]);
     if (!looksLikeUserName(split.userName)) return split.timeText ? split : null;
@@ -1945,7 +1946,7 @@
 
     // Facebook 会把专业面板内部页面重写成不同路由；用 DOM 再确认一次，避免误判后强制跳转。
     const bodyText = String(document.body?.innerText || '');
-    const hasManagerTitle = bodyText.includes('评论管理工具') || bodyText.includes('評論管理工具') || /comments manager/i.test(bodyText);
+    const hasManagerTitle = bodyText.includes('评论管理工具') || bodyText.includes('評論管理工具') || bodyText.includes('留言管理工具') || bodyText.includes('留言管理員') || /comments manager/i.test(bodyText);
     if (!hasManagerTitle) return false;
     const hasCommentControls = [...ALL_COMMENTS_WORDS, ...UNREPLIED_WORDS, ...REPLIED_WORDS, ...MESSAGE_WORDS]
       .some(word => normalizeForMatch(bodyText).includes(normalizeForMatch(word)));
