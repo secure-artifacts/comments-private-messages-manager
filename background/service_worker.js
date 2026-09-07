@@ -38,7 +38,7 @@ chrome.runtime.onInstalled.addListener(async () => {
     persistentWorkerMode: true,
     strictSequentialSend: true,
     pauseOnSendFailure: false,
-    maxSendRetries: Number(existing.maxSendRetries || 3),
+    maxSendRetries: 1,
     retryBackoffSeconds: Number(existing.retryBackoffSeconds || 3),
     privateDialogOpenTimeoutSeconds: Number(existing.privateDialogOpenTimeoutSeconds || 15),
     privateDialogOpenRetryClicks: Number(existing.privateDialogOpenRetryClicks || 2),
@@ -423,13 +423,8 @@ async function claimComment(task, senderTabId) {
 
   if (await StorageUtil.isCommentProcessed(task.commentKey)) return { status: 'ALREADY_PROCESSED' };
 
-  // 已失败过的评论也不能永久卡住工作流程：达到最大失败次数后直接标记为已处理并跳过；
-  // 尚未达到上限时遵守短暂退避，由当前工作页继续尝试。
-  const retryState = await StorageUtil.canRetryComment(
-    task.commentKey,
-    Number(settings.maxSendRetries || 3),
-    Number(settings.retryBackoffSeconds || 3)
-  );
+  // 发送失败过的评论直接跳过，不再重试。
+  const retryState = await StorageUtil.canRetryComment(task.commentKey, 1, 0);
   if (!retryState.canRetry) {
     if (retryState.exhausted) {
       await StorageUtil.markCommentProcessed(task.commentKey, {
@@ -637,63 +632,35 @@ async function handleTaskResult(taskKey, result, task, senderTabId) {
     return { status: 'RECORDED_SUCCESS' };
   }
 
-  // 失败最多重试 N 次。达到上限后必须释放当前任务并跳过，不能让某个异常评论永久卡住工作流程。
-  const settings = await StorageUtil.getSettings();
-  const maxRetries = Math.max(1, Number(settings.maxSendRetries || 3));
   const rec = await StorageUtil.recordCommentFailure(taskKey, result?.reason || 'send_failed');
-  await StorageUtil.updateStats({ totalErrors: 1 });
+  await StorageUtil.updateStats({ totalErrors: 1, totalProcessed: 1, totalFailedSkipped: 1 });
+  const meta = {
+    reason: 'send_failed_exhausted',
+    userName: finalTask.userName,
+    userKey: finalTask.userKey,
+    commentText: finalTask.commentText,
+    postTitle: finalTask.postTitle,
+    attempts: Number(rec.count || 1),
+    lastError: result?.reason || 'send_failed'
+  };
+  await StorageUtil.markCommentProcessed(taskKey, meta);
+  if (finalTask.commentKey && finalTask.commentKey !== taskKey) {
+    await StorageUtil.markCommentProcessed(finalTask.commentKey, meta);
+  }
+  await StorageUtil.releaseWorkerReservation(taskKey);
   await StorageUtil.addLog({
     ...finalTask,
     commentKey: taskKey,
     matchedKeyword: '(all)',
-    dmStatus: `❌ 发送失败 (${rec.count}/${maxRetries})`,
-    reason: formatFailureReason(result?.reason || 'send_failed'),
+    dmStatus: '❌ 发送失败，已跳过',
+    reason: formatFailureReason(result?.reason || rec.errorMessage || 'send_failed'),
     level: 'error'
   });
-
-  if (Number(rec.count || 0) >= maxRetries) {
-    const meta = {
-      reason: 'send_failed_exhausted',
-      userName: finalTask.userName,
-      userKey: finalTask.userKey,
-      commentText: finalTask.commentText,
-      postTitle: finalTask.postTitle,
-      attempts: Number(rec.count || 0),
-      lastError: result?.reason || 'send_failed'
-    };
-    await StorageUtil.markCommentProcessed(taskKey, meta);
-    if (finalTask.commentKey && finalTask.commentKey !== taskKey) {
-      await StorageUtil.markCommentProcessed(finalTask.commentKey, meta);
-    }
-    await StorageUtil.releaseWorkerReservation(taskKey);
-    await StorageUtil.updateStats({ totalProcessed: 1, totalFailedSkipped: 1 });
-    await StorageUtil.addLog({
-      ...finalTask,
-      commentKey: taskKey,
-      matchedKeyword: '(all)',
-      dmStatus: `⏭ 无法私信，已跳过`,
-      reason: `${rec.count} 次尝试均失败：${formatFailureReason(result?.reason || rec.errorMessage || 'send_failed')}`,
-      level: 'warning'
-    });
-    await StorageUtil.saveSettings({
-      statusMessage: `⏭ ${finalTask.userName || '当前用户'} 连续失败 ${rec.count} 次，已跳过；正在重新检查最新评论...`
-    });
-    await wakeAllWorkers();
-    return { status: 'FAILURE_EXHAUSTED_RELEASED', retryCount: Number(rec.count || 0) };
-  }
-
-  if (StorageUtil.updateWorkerReservation) {
-    await StorageUtil.updateWorkerReservation(taskKey, {
-      lastFailureAt: Date.now(),
-      lastFailureReason: result?.reason || 'send_failed',
-      task: finalTask,
-      updatedAt: Date.now()
-    });
-  }
   await StorageUtil.saveSettings({
-    statusMessage: `⚠️ ${finalTask.userName || '当前用户'} 第 ${rec.count}/${maxRetries} 次发送失败，当前工作页将重试这条。`
+    statusMessage: `⏭ ${finalTask.userName || '当前用户'} 发送失败，已跳过；正在处理下一条...`
   });
-  return { status: 'FAILURE_RETRY_SAME_TASK', retryCount: Number(rec.count || 0) };
+  await wakeAllWorkers();
+  return { status: 'FAILURE_EXHAUSTED_RELEASED', retryCount: Number(rec.count || 1) };
 }
 
 

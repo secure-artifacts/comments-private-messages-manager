@@ -105,12 +105,12 @@
         <section class="tab-panel" id="tab-strategy">
           <div class="card">
             <div class="card-header">
-              <h3>🛡️ 评论优先级、冷却与重试</h3>
+              <h3>🛡️ 评论优先级、冷却与去重</h3>
               <p class="subtitle">这些设置决定扫描速度、用户冷却、旧评论回溯以及发送失败后的处理方式。</p>
             </div>
             <div class="form-grid">
               <div class="notice-panel" style="margin-top:0">
-                <b>单工作页逻辑：</b>启动后自动切到“所有评论”。固定 1 个工作标签页严格串行：按时间定位评论 → 弹出 Messenger 私信框 → 发送并确认 → 记录去重 → 继续下一条。后台按你设置的刷新分钟数刷新一次，再从顶部重新检测最新评论。只处理最近7天；失败达到设定次数后跳过。
+                <b>单工作页逻辑：</b>启动后自动切到“所有评论”。固定 1 个工作标签页严格串行：按时间定位评论 → 弹出 Messenger 私信框 → 发送并确认 → 记录去重 → 继续下一条。后台按你设置的刷新分钟数刷新一次，再从顶部重新检测最新评论。只处理最近7天；发送失败一次即跳过，不再重试。
               </div>
 
               <div class="form-group">
@@ -127,7 +127,7 @@
 
               <div class="form-group checkbox-group">
                 <label class="checkbox-label"><input type="checkbox" id="checkAssumeSuccessNoError" checked><span>发送按钮已点击且未检测到错误时，超时按成功记录（推荐，防止重复发送）</span></label>
-                <small class="help-text">备注：解决“消息实际已经发出，但 Facebook 没有提供明确成功状态”时插件反复重试的问题。只有出现“发送失败 / 无法发送 / 重试”等明确错误才判定失败。</small>
+                <small class="help-text">备注：解决“消息实际已经发出，但 Facebook 没有提供明确成功状态”时被记成失败的问题。只有出现“发送失败 / 无法发送”等明确错误才判定失败；失败后直接跳过当前评论。</small>
               </div>
 
               <div class="form-group">
@@ -158,22 +158,10 @@
                 <small class="help-text">备注：同一个用户即使在不同贴文、视频或 Reel 下重复留言，也会在这段时间内跳过第二次私信。设为 0 可关闭用户冷却；“清空用户冷却”会让历史用户重新具备发送资格。</small>
               </div>
 
-              <div class="form-group">
-                <label>单条评论发送失败最大重试次数</label>
-                <div class="range-inputs"><input type="number" id="inputMaxRetries" class="form-input" min="1" max="10" value="3"><span>次</span></div>
-                <small class="help-text">备注：同一条评论连续发送失败达到此次数后，会记录为失败并跳过，避免一个异常用户一直卡住整个流程。</small>
-              </div>
-
-              <div class="form-group">
-                <label>单次失败后再次尝试等待（秒）</label>
-                <div class="range-inputs"><input type="number" id="inputRetryBackoff" class="form-input" min="1" max="60" value="3"><span>秒</span></div>
-                <small class="help-text">备注：建议 2–5 秒。单次失败后等待这段时间再重试；达到最大重试次数后会记录失败并跳过，再继续下一条。</small>
-              </div>
-
               <div class="form-group"><label>评论处理时间范围</label><div class="range-inputs"><input type="number" id="inputMaxCommentAgeDays" class="form-input" min="1" max="30" value="7"><span>天</span></div><small class="help-text">备注：默认最近 7 天。超过这个时间范围的评论不会再发送；列表按时间从新到旧处理，避免无限回溯非常久以前的留言。</small></div>
               <div class="form-group checkbox-group"><label class="checkbox-label"><input type="checkbox" id="checkProcessOlder" checked><span>没有新评论时，继续向下处理最近7天内尚未处理的旧评论</span></label><small class="help-text">备注：开启后顶部没有新任务时会继续向下滚动；关闭后只处理当前顶部可见的新评论。</small></div>
               <div class="form-group checkbox-group"><label class="checkbox-label"><input type="checkbox" id="checkAutoSelect" checked><span>工作标签页离开评论管理工具后自动返回固定入口</span></label><small class="help-text">备注：建议开启。若 Facebook 内部跳转导致离开评论管理工具，插件会提示并恢复到正确入口；不会高频刷新。</small></div>
-              <div class="notice-panel" style="margin-top:0"><b>固定规则：</b>每次页面加载自动选择“所有评论”；默认所有评论都发私信；只处理最近7天；发送成功后绝不刷新，直接继续下一条；只有后台按你设置的分钟周期允许刷新；命中「反向关键词」或处于用户冷却期才跳过。</div>
+              <div class="notice-panel" style="margin-top:0"><b>固定规则：</b>每次页面加载自动选择“所有评论”；默认所有评论都发私信；只处理最近7天；发送成功或失败后都不刷新，直接继续下一条；发送失败不重试；只有后台按你设置的分钟周期允许刷新；命中「反向关键词」或处于用户冷却期才跳过。</div>
               <div class="form-group checkbox-group"><label class="checkbox-label"><input type="checkbox" id="checkEmergencyBrake" checked><span>检测到 Facebook 验证/限制提示时自动熔断停止</span></label><small class="help-text">备注：检测到验证码、临时限制或安全检查时立即停止任务，避免继续操作。</small></div>
             </div>
             <div class="form-actions mt-4">

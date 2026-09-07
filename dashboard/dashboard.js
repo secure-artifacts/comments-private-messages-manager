@@ -150,8 +150,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     $('checkAssumeSuccessNoError').checked = s.assumeSuccessAfterClickNoError !== false;
     $('inputScanInterval').value = s.scanIntervalSeconds ?? 3;
     $('inputCooldown').value = s.dmCooldownHours ?? s.globalCooldownHours ?? 72;
-    $('inputMaxRetries').value = s.maxSendRetries ?? 3;
-    $('inputRetryBackoff').value = s.retryBackoffSeconds ?? 3;
     $('inputMaxCommentAgeDays').value = s.maxCommentAgeDays ?? 7;
     $('checkProcessOlder').checked = s.processOlderComments !== false;
     $('checkAutoSelect').checked = s.autoSelectFacebookComments !== false;
@@ -166,8 +164,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     const periodicRefreshMinutes = clampInt($('inputRefreshMinutes').value, 1, 60, 5);
     const periodicRefreshEnabled = $('checkPeriodicRefresh').checked;
     const dmCooldownHours = clampInt($('inputCooldown').value, 0, 720, 72);
-    const maxSendRetries = clampInt($('inputMaxRetries').value, 1, 10, 3);
-    const retryBackoffSeconds = clampInt($('inputRetryBackoff').value, 1, 60, 3);
     const maxCommentAgeDays = clampInt($('inputMaxCommentAgeDays').value, 1, 30, 7);
     await StorageUtil.saveSettings({
       singleWorkerMode: true,
@@ -186,8 +182,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       idleRefreshEnabled: periodicRefreshEnabled,
       dmCooldownHours,
       globalCooldownHours: dmCooldownHours,
-      maxSendRetries,
-      retryBackoffSeconds,
+      maxSendRetries: 1,
       maxCommentAgeDays,
       forceAllCommentsFilter: true,
       refreshAfterSuccess: false,
@@ -203,7 +198,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   $('btnSaveStrategy').addEventListener('click', saveStrategy);
-  ['inputDialogOpenTimeout', 'inputSendConfirmTimeout', 'inputPostSendWait', 'inputScanInterval', 'inputRefreshMinutes', 'inputCooldown', 'inputMaxRetries', 'inputRetryBackoff', 'inputMaxCommentAgeDays'].forEach(id => {
+  ['inputDialogOpenTimeout', 'inputSendConfirmTimeout', 'inputPostSendWait', 'inputScanInterval', 'inputRefreshMinutes', 'inputCooldown', 'inputMaxCommentAgeDays'].forEach(id => {
     $(id).addEventListener('change', saveStrategy);
   });
   ['checkProcessOlder', 'checkAutoSelect', 'checkPeriodicRefresh', 'checkAssumeSuccessNoError', 'checkEmergencyBrake'].forEach(id => {
@@ -560,7 +555,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       private_dialog_enter_confirmed: 'Messenger 回车发送已确认',
       send_click_no_error_assumed_success: '发送按钮已点击，未检测到失败提示，按成功记录',
       enter_send_no_error_assumed_success: '回车发送已执行，未检测到失败提示，按成功记录',
-      send_failed_exhausted: '多次尝试仍无法发送，已跳过当前评论'
+      send_failed_exhausted: '发送失败，已跳过当前评论'
     };
     return map[raw] || raw;
   }

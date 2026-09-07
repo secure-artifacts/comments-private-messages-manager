@@ -193,7 +193,7 @@
         continue;
       }
 
-      // 失败达到上限/冷却/任务已被占用等情况不刷新，直接继续下一条，避免页面抖动。
+      // 失败/冷却/任务已被占用等情况不刷新，直接继续下一条，避免页面抖动。
       setScrollTop(scrollHost, 0);
       await sleep(Math.max(350, Number(settings.scanIntervalSeconds || 3) * 350));
     }
@@ -465,86 +465,64 @@
     let task = { ...claimed.task, element: claimed.row, workerSlot: slot };
     const taskKey = claimed.taskKey;
     const dmText = claimed.dmText;
-    const maxRetries = Math.max(1, Number(settings.maxSendRetries || 3));
-    let attempts = 0;
 
-    while (attempts < maxRetries) {
+    while (true) {
       const live = await StorageUtil.getSettings();
       if (!live.isRunning) {
         await sendRuntimeMessage({ action: 'ABANDON_TASK', taskKey, reason: 'stopped' });
         return { outcome: 'stopped', taskKey };
       }
-      if (live.isPaused) {
-        await sleep(900);
-        continue;
-      }
-
-      attempts++;
-      await closeOpenPrivateReplyDialogs();
-
-      if (!task.element || !document.contains(task.element)) {
-        task.element = await locateAssignedTaskRow(scrollHost, task, 18000);
-      }
-
-      if (!task.element) {
-        const failure = await reportFailure(taskKey, task, `工作页 无法重新定位当前评论`);
-        if (failure?.status === 'FAILURE_EXHAUSTED_RELEASED') return { outcome: 'failed_skipped', taskKey };
-        await waitBeforeRetry(live, slot, task, attempts, maxRetries);
-        continue;
-      }
-
-      const fresh = buildCommentSnapshot(task.element);
-      task = { ...task, ...fresh, element: task.element, workerSlot: slot, commentKey: task.commentKey || fresh.commentKey };
-      const validation = await sendRuntimeMessage({ action: 'VALIDATE_CLAIM_DETAILS', taskKey, task });
-      if (!validation || validation.status !== 'OK') {
-        if (['SKIPPED_PROCESSED', 'SKIPPED_COOLDOWN', 'USER_RESERVED', 'CLAIM_LOST'].includes(validation?.status)) {
-          return { outcome: 'skipped', taskKey };
-        }
-        const failure = await reportFailure(taskKey, task, validation?.status || 'claim_validation_failed');
-        if (failure?.status === 'FAILURE_EXHAUSTED_RELEASED') return { outcome: 'failed_skipped', taskKey };
-        await waitBeforeRetry(live, slot, task, attempts, maxRetries);
-        continue;
-      }
-      if (validation.task) task = { ...task, ...validation.task, element: task.element, workerSlot: slot };
-
-      const sent = await performRowPrivateMessage(task.element, dmText, live);
-      if (sent.ok) {
-        const recorded = await recordConfirmedSuccessWithAck(taskKey, task, sent.verification || 'dm_sent');
-        if (!recorded) {
-          await StorageUtil.markCommentProcessed(taskKey, {
-            reason: 'dm_sent_local_fallback', userName: task.userName, userKey: task.userKey,
-            commentText: task.commentText, postTitle: task.postTitle, verification: sent.verification || 'dm_sent'
-          });
-          if (task.userKey) {
-            await StorageUtil.recordUserTouch(task.userKey, {
-              userName: task.userName, profileLink: task.profileLink, dmSentSuccess: true,
-              lastCommentKey: task.commentKey || taskKey, lastPostTitle: task.postTitle
-            });
-          }
-          await StorageUtil.releaseWorkerReservation(taskKey);
-        }
-
-        await closeOpenPrivateReplyDialogs();
-        await setStatusMessage(`✅ 工作页 已发送给 ${task.userName || '用户'}并记录去重；正在继续扫描下一条评论。`);
-        return { outcome: 'sent', taskKey, task };
-      }
-
-      const failure = await reportFailure(taskKey, task, sent.error || '私信发送失败', !!sent.uncertain);
-      if (failure?.status === 'FAILURE_EXHAUSTED_RELEASED') {
-        await closeOpenPrivateReplyDialogs();
-        return { outcome: 'failed_skipped', taskKey };
-      }
-
-      await closeOpenPrivateReplyDialogs();
-      await waitBeforeRetry(live, slot, task, attempts, maxRetries);
+      if (!live.isPaused) break;
+      await sleep(900);
     }
 
-    await StorageUtil.markCommentProcessed(taskKey, {
-      reason: 'local_retry_exhausted_fallback', userName: task.userName, userKey: task.userKey,
-      commentText: task.commentText, postTitle: task.postTitle, attempts: maxRetries
-    });
-    await StorageUtil.releaseWorkerReservation(taskKey);
-    await sendRuntimeMessage({ action: 'ABANDON_TASK', taskKey, reason: 'local_retry_exhausted_fallback' });
+    const live = await StorageUtil.getSettings();
+    await closeOpenPrivateReplyDialogs();
+
+    if (!task.element || !document.contains(task.element)) {
+      task.element = await locateAssignedTaskRow(scrollHost, task, 18000);
+    }
+
+    if (!task.element) {
+      await reportFailure(taskKey, task, `工作页 无法重新定位当前评论`);
+      return { outcome: 'failed_skipped', taskKey };
+    }
+
+    const fresh = buildCommentSnapshot(task.element);
+    task = { ...task, ...fresh, element: task.element, workerSlot: slot, commentKey: task.commentKey || fresh.commentKey };
+    const validation = await sendRuntimeMessage({ action: 'VALIDATE_CLAIM_DETAILS', taskKey, task });
+    if (!validation || validation.status !== 'OK') {
+      if (['SKIPPED_PROCESSED', 'SKIPPED_COOLDOWN', 'USER_RESERVED', 'CLAIM_LOST'].includes(validation?.status)) {
+        return { outcome: 'skipped', taskKey };
+      }
+      await reportFailure(taskKey, task, validation?.status || 'claim_validation_failed');
+      return { outcome: 'failed_skipped', taskKey };
+    }
+    if (validation.task) task = { ...task, ...validation.task, element: task.element, workerSlot: slot };
+
+    const sent = await performRowPrivateMessage(task.element, dmText, live);
+    if (sent.ok) {
+      const recorded = await recordConfirmedSuccessWithAck(taskKey, task, sent.verification || 'dm_sent');
+      if (!recorded) {
+        await StorageUtil.markCommentProcessed(taskKey, {
+          reason: 'dm_sent_local_fallback', userName: task.userName, userKey: task.userKey,
+          commentText: task.commentText, postTitle: task.postTitle, verification: sent.verification || 'dm_sent'
+        });
+        if (task.userKey) {
+          await StorageUtil.recordUserTouch(task.userKey, {
+            userName: task.userName, profileLink: task.profileLink, dmSentSuccess: true,
+            lastCommentKey: task.commentKey || taskKey, lastPostTitle: task.postTitle
+          });
+        }
+        await StorageUtil.releaseWorkerReservation(taskKey);
+      }
+
+      await closeOpenPrivateReplyDialogs();
+      await setStatusMessage(`✅ 工作页 已发送给 ${task.userName || '用户'}并记录去重；正在继续扫描下一条评论。`);
+      return { outcome: 'sent', taskKey, task };
+    }
+
+    await reportFailure(taskKey, task, sent.error || '私信发送失败', !!sent.uncertain);
     await closeOpenPrivateReplyDialogs();
     return { outcome: 'failed_skipped', taskKey };
   }
@@ -1914,13 +1892,6 @@
 
   async function reportFailure(taskKey, task, reason, uncertain = false) {
     return sendRuntimeMessage({ action: 'TASK_RESULT', taskKey, task, result: { ok: false, uncertain, reason: String(reason || 'send_failed') } });
-  }
-
-  async function waitBeforeRetry(settings, slot, task, attempts, maxRetries) {
-    if (attempts >= maxRetries) return;
-    const backoff = Math.max(1, Math.min(60, Number(settings.retryBackoffSeconds || 3)));
-    await setStatusMessage(`工作页：${task.userName || '当前用户'} 第 ${attempts}/${maxRetries} 次未发送成功，${backoff} 秒后重试；达到上限后自动跳过。`);
-    await sleep(backoff * 1000);
   }
 
   async function heartbeat(slot) {

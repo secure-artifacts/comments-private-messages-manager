@@ -28,11 +28,11 @@ const DEFAULT_SETTINGS = {
   reverseKeywordMode: true,
   emergencyBrakeEnabled: true,
   emergencyBrakeReason: '',
-  maxSendRetries: 3,
+  maxSendRetries: 1, // 发送失败不重试，直接跳过当前评论
   retryBackoffSeconds: 3,
   singleWorkerMode: true, // v2.12.1 固定单工作页：启动时只打开 1 个评论管理工具标签页
   strictSequentialSend: true, // 单工作页内严格串行：当前评论处理结束后才进入下一条
-  pauseOnSendFailure: false, // 失败按重试策略处理，不会暂停整个插件
+  pauseOnSendFailure: false, // 发送失败直接跳过，不会暂停整个插件
   privateDialogOpenTimeoutSeconds: 15, // 点击评论行“发消息”后，等待 Messenger 私信框出现
   privateDialogOpenRetryClicks: 2, // 单次发送尝试内，如弹框未出现，最多重新点击“发消息”的次数
   sendConfirmTimeoutSeconds: 30, // 点击真正发送按钮后，基础确认等待时间
@@ -112,7 +112,7 @@ const SETTINGS_NUMBER_FIELDS = {
   periodicRefreshMinutes: [1, 60, 5],
   lastPeriodicRefreshAt: [0, Number.MAX_SAFE_INTEGER, 0],
   nextPeriodicRefreshAt: [0, Number.MAX_SAFE_INTEGER, 0],
-  maxSendRetries: [1, 10, 3],
+  maxSendRetries: [1, 1, 1],
   retryBackoffSeconds: [1, 60, 3],
   privateDialogOpenTimeoutSeconds: [5, 45, 15],
   privateDialogOpenRetryClicks: [1, 3, 2],
@@ -251,6 +251,7 @@ const SecurityUtil = {
     out.persistentWorkerMode = true;
     out.strictSequentialSend = true;
     out.pauseOnSendFailure = false;
+    out.maxSendRetries = 1;
     out.forceAllCommentsFilter = src.forceAllCommentsFilter !== false;
     out.themeColor = THEME_COLOR_IDS.includes(src.themeColor) ? src.themeColor : 'cyan';
     out.appearanceMode = src.appearanceMode === 'dark' ? 'dark' : 'light';
