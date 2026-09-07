@@ -109,9 +109,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!countdownEl) return;
     if (!settings.isRunning || settings.isPaused || settings.periodicRefreshEnabled === false) {
       countdownEl.textContent = '--:--';
-      countdownEl.classList.remove('soon');
+      countdownEl.classList.remove('soon', 'soon-text');
       return;
     }
+    if (settings.pendingPeriodicRefresh) {
+      countdownEl.textContent = '发送后补刷';
+      countdownEl.classList.add('soon', 'soon-text');
+      return;
+    }
+    countdownEl.classList.remove('soon-text');
     const nextAt = Number(settings.nextPeriodicRefreshAt || 0);
     if (!nextAt) {
       countdownEl.textContent = '等待';

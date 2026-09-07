@@ -817,6 +817,7 @@ body {
   color: #67e8f9;
   font-weight: 800;
   letter-spacing: 0.6px;
+  white-space: nowrap;
 }
 #refreshCountdown.countdown-soon {
   color: #fbbf24;

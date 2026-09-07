@@ -1,20 +1,23 @@
 /**
- * FB 评论私信管家 - 评论管理工具单工作页版 v2.12.1
+ * FB 评论私信管家 - 评论管理工具单工作页版 v2.12.6
  *
  * 核心架构：
  * 1. 启动时固定只创建 1 个 Facebook 评论管理工具工作标签页。
  * 2. 单工作页严格串行：扫描最新评论 -> 打开 Messenger 私信框 -> 发送并记录 -> 再处理下一条。
  * 3. 评论去重、用户冷却和失败记录统一写入 chrome.storage.local，避免重复发送。
  * 4. 页面刷新只由后台可配置周期定时器触发，不因发送成功/失败而额外刷新。
+ * 5. 到点时若工作页正在发私信，本轮不刷新、不重置 5 分钟周期；发送结束后立刻补刷。
  */
 
 importScripts('../utils/storage.js');
 
-const VERSION = '2.12.1';
+const VERSION = '2.12.6';
 let claimChain = Promise.resolve();
 let reconcilingWorkers = false;
+let refreshInFlight = false;
 const WATCHDOG_ALARM = 'fb_inbox_watchdog';
 const REFRESH_ALARM = 'fb_worker_periodic_refresh';
+const RECENT_REFRESH_GUARD_MS = 20 * 1000;
 
 console.log(`FB Comment DM Manager Service Worker v${VERSION} initialized.`);
 
@@ -55,6 +58,7 @@ chrome.runtime.onInstalled.addListener(async () => {
     periodicRefreshMinutes: refreshMinutes,
     lastPeriodicRefreshAt: Number(existing.lastPeriodicRefreshAt || 0),
     nextPeriodicRefreshAt: 0,
+    pendingPeriodicRefresh: false,
     assumeSuccessAfterClickNoError: existing.assumeSuccessAfterClickNoError !== false,
     commentsManagerUrl: existing.commentsManagerUrl || DEFAULT_COMMENTS_MANAGER_URL
   });
@@ -83,6 +87,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     // Watchdog 只补齐唯一工作标签页，绝不改写现有页面 URL，避免形成导航/刷新循环。
     if (settings.isRunning && !settings.isPaused) await ensureWorkerTabs(false);
     await syncWorkerCount();
+    await tryDueOrPendingRefresh();
     return;
   }
 
@@ -92,7 +97,15 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 });
 
 chrome.storage.onChanged.addListener(async (changes, areaName) => {
-  if (areaName !== 'local' || !changes.settings) return;
+  if (areaName !== 'local') return;
+
+  if (changes.workerReservations) {
+    const after = changes.workerReservations.newValue || {};
+    const stillBusy = Object.values(after).some(rec => Number(rec?.tabId || rec?.workerTabId || 0));
+    if (!stillBusy) await maybeFlushPendingRefresh();
+  }
+
+  if (!changes.settings) return;
   const before = changes.settings.oldValue || {};
   const after = changes.settings.newValue || {};
 
@@ -104,7 +117,7 @@ chrome.storage.onChanged.addListener(async (changes, areaName) => {
       await startPeriodicRefreshAlarm();
     } else {
       await chrome.alarms.clear(REFRESH_ALARM);
-      await StorageUtil.saveSettings({ nextPeriodicRefreshAt: 0 });
+      await StorageUtil.saveSettings({ nextPeriodicRefreshAt: 0, pendingPeriodicRefresh: false });
     }
   }
 });
@@ -235,6 +248,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
           if (!fromContentScript) { sendResponse({ status: 'FORBIDDEN' }); return; }
           const result = await withClaimLock(() => handleTaskResult(req.taskKey || '', req.result || {}, req.task || {}, senderTabId));
           sendResponse(result);
+          await maybeFlushPendingRefresh();
           break;
         }
 
@@ -242,6 +256,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
           if (!fromContentScript) { sendResponse({ status: 'FORBIDDEN' }); return; }
           const released = await withClaimLock(() => abandonTask(req.taskKey || '', senderTabId, req.reason || 'abandoned'));
           sendResponse({ status: released ? 'RELEASED' : 'NOT_FOUND' });
+          await maybeFlushPendingRefresh();
           break;
         }
 
@@ -302,6 +317,7 @@ async function startMonitoring() {
     periodicRefreshEnabled: settings.periodicRefreshEnabled !== false,
     periodicRefreshMinutes: refreshMinutes,
     nextPeriodicRefreshAt: 0,
+    pendingPeriodicRefresh: false,
     assumeSuccessAfterClickNoError: settings.assumeSuccessAfterClickNoError !== false,
     statusMessage: `正在启动 Facebook 评论管理工具：固定单工作页串行处理，自动切换“所有评论”，只处理最近 ${Number(settings.maxCommentAgeDays || 7)} 天；页面按 ${refreshMinutes} 分钟周期刷新。`
   });
@@ -317,7 +333,7 @@ async function pauseMonitoring() {
     statusMessage: '任务已暂停；工作标签页保留，继续运行后从最新评论重新检查。'
   });
   await chrome.alarms.clear(REFRESH_ALARM);
-  await StorageUtil.saveSettings({ nextPeriodicRefreshAt: 0 });
+  await StorageUtil.saveSettings({ nextPeriodicRefreshAt: 0, pendingPeriodicRefresh: false });
   await wakeAllWorkers();
 }
 
@@ -328,7 +344,7 @@ async function stopMonitoring() {
     statusMessage: '任务已停止，正在关闭工作标签页...'
   });
   await chrome.alarms.clear(REFRESH_ALARM);
-  await StorageUtil.saveSettings({ nextPeriodicRefreshAt: 0 });
+  await StorageUtil.saveSettings({ nextPeriodicRefreshAt: 0, pendingPeriodicRefresh: false });
   await closeAllWorkerTabs();
   await StorageUtil.clearWorkerReservations();
   await StorageUtil.saveSettings({ workerTabIds: [], activeWorkerCount: 0 });
@@ -726,8 +742,29 @@ async function markSkippedComment(task, reason, dmStatus, matchedKeyword, statsD
   });
 }
 
+function getReservationBusyTtlMs(settings) {
+  const openSec = Math.max(5, Number(settings?.privateDialogOpenTimeoutSeconds || 15));
+  const openClicks = Math.max(1, Number(settings?.privateDialogOpenRetryClicks || 2));
+  const confirmSec = Math.max(10, Number(settings?.sendConfirmTimeoutSeconds || 30));
+  const graceSec = Math.max(15, Number(settings?.sendInProgressGraceSeconds || 45));
+  // 超过「开框 + 确认 + 发送中宽限 + 1 分钟缓冲」仍未释放，视为卡死预约，不再挡住定时刷新。
+  return (openSec * openClicks + confirmSec + graceSec + 60) * 1000;
+}
+
+function isReservationActivelyBusy(rec, now, ttlMs) {
+  const tabId = Number(rec?.tabId || rec?.workerTabId || 0);
+  if (!tabId) return false;
+  const ts = Number(rec?.updatedAt || rec?.createdAt || 0);
+  if (!ts) return true;
+  return now - ts < ttlMs;
+}
+
 async function cleanupDeadReservations() {
   const settings = await StorageUtil.getSettings();
+  const ttlMs = getReservationBusyTtlMs(settings);
+  if (StorageUtil.cleanupStaleWorkerReservations) {
+    await StorageUtil.cleanupStaleWorkerReservations(ttlMs);
+  }
   const ids = new Set((Array.isArray(settings.workerTabIds) ? settings.workerTabIds : []).map(Number).filter(Boolean));
   const map = await StorageUtil.getWorkerReservations();
   let changed = false;
@@ -820,7 +857,7 @@ async function startPeriodicRefreshAlarm() {
   await chrome.alarms.clear(REFRESH_ALARM);
   const settings = await StorageUtil.getSettings();
   if (!settings.isRunning || settings.isPaused || settings.periodicRefreshEnabled === false) {
-    await StorageUtil.saveSettings({ nextPeriodicRefreshAt: 0 });
+    await StorageUtil.saveSettings({ nextPeriodicRefreshAt: 0, pendingPeriodicRefresh: false });
     return;
   }
 
@@ -840,42 +877,112 @@ async function startPeriodicRefreshAlarm() {
   });
 }
 
-async function refreshAllIdleWorkersOnce() {
+async function maybeFlushPendingRefresh() {
+  const settings = await StorageUtil.getSettings();
+  if (settings.pendingPeriodicRefresh === true) {
+    await refreshAllIdleWorkersOnce();
+  }
+}
+
+async function tryDueOrPendingRefresh() {
   const settings = await StorageUtil.getSettings();
   if (!settings.isRunning || settings.isPaused || settings.periodicRefreshEnabled === false) return;
+  const pending = settings.pendingPeriodicRefresh === true;
+  const nextAt = Number(settings.nextPeriodicRefreshAt || 0);
+  const overdue = nextAt > 0 && Date.now() >= nextAt;
+  if (pending || overdue) await refreshAllIdleWorkersOnce();
+}
 
-  const ids = Array.isArray(settings.workerTabIds) ? settings.workerTabIds.map(Number).filter(Boolean) : [];
-  if (!ids.length) return;
-
-  const reservations = await StorageUtil.getWorkerReservations();
-  const busyTabIds = new Set(Object.values(reservations || {}).map(rec => Number(rec?.tabId || 0)).filter(Boolean));
-  const refreshed = [];
-  const skippedBusy = [];
-
-  for (const tabId of ids) {
-    const tab = await safeGetTab(tabId);
-    if (!tab) continue;
-    if (busyTabIds.has(tabId)) {
-      skippedBusy.push(tabId);
-      continue;
+async function refreshAllIdleWorkersOnce() {
+  if (refreshInFlight) return { status: 'IN_FLIGHT' };
+  refreshInFlight = true;
+  try {
+    const settings = await StorageUtil.getSettings();
+    if (!settings.isRunning || settings.isPaused || settings.periodicRefreshEnabled === false) {
+      await StorageUtil.saveSettings({ pendingPeriodicRefresh: false, nextPeriodicRefreshAt: 0 });
+      return { status: 'DISABLED' };
     }
-    // 只刷新已经存在的 Facebook 工作标签页；绝不改写 URL。
-    if (!SecurityUtil.isFacebookTabUrl(tab.url)) continue;
-    try {
-      await chrome.tabs.reload(tabId, { bypassCache: false });
-      refreshed.push(tabId);
-    } catch (e) { /* ignore */ }
-  }
 
-  const intervalMinutes = clamp(Number(settings.periodicRefreshMinutes || 5), 1, 60);
-  const refreshedAt = Date.now();
-  await StorageUtil.saveSettings({
-    lastPeriodicRefreshAt: refreshedAt,
-    nextPeriodicRefreshAt: refreshedAt + intervalMinutes * 60 * 1000,
-    statusMessage: refreshed.length
-      ? `🔄 ${intervalMinutes} 分钟刷新周期到达：工作页已刷新。`
-      : `⏳ ${intervalMinutes} 分钟刷新周期到达，但当前工作页正在发私信，本轮跳过刷新，不会打断发送。`
-  });
+    const intervalMinutes = clamp(
+      Number(settings.periodicRefreshMinutes || Math.round(Number(settings.idleRefreshSeconds || 300) / 60) || 5),
+      1,
+      60
+    );
+    const now = Date.now();
+    const lastAt = Number(settings.lastPeriodicRefreshAt || 0);
+    if (lastAt && now - lastAt < RECENT_REFRESH_GUARD_MS && settings.pendingPeriodicRefresh !== true) {
+      return { status: 'RECENT' };
+    }
+
+    const ids = Array.isArray(settings.workerTabIds) ? settings.workerTabIds.map(Number).filter(Boolean) : [];
+    if (!ids.length) {
+      await StorageUtil.saveSettings({
+        pendingPeriodicRefresh: true,
+        statusMessage: `⏳ ${intervalMinutes} 分钟刷新已到点，但还没有工作标签页；工作页就绪后会立即补刷。`
+      });
+      return { status: 'NO_WORKER' };
+    }
+
+    await cleanupDeadReservations();
+    const reservations = await StorageUtil.getWorkerReservations();
+    const ttlMs = getReservationBusyTtlMs(settings);
+    const busyTabIds = new Set(
+      Object.values(reservations || {})
+        .filter(rec => isReservationActivelyBusy(rec, Date.now(), ttlMs))
+        .map(rec => Number(rec?.tabId || rec?.workerTabId || 0))
+        .filter(Boolean)
+    );
+
+    const idleIds = [];
+    let skippedBusy = 0;
+    for (const tabId of ids) {
+      if (busyTabIds.has(tabId)) skippedBusy += 1;
+      else idleIds.push(tabId);
+    }
+
+    if (!idleIds.length && skippedBusy) {
+      // 正在发私信：不刷新、不把下一轮再推迟 5 分钟。发送结束后由 maybeFlushPendingRefresh 立刻补刷。
+      if (settings.pendingPeriodicRefresh !== true) {
+        await StorageUtil.saveSettings({
+          pendingPeriodicRefresh: true,
+          statusMessage: `⏳ ${intervalMinutes} 分钟刷新已到点，但工作页正在发私信。当前这条发完后会立即补刷，不会打断发送，也不会再等一整轮。`
+        });
+      }
+      return { status: 'DEFERRED_BUSY' };
+    }
+
+    const refreshed = [];
+    for (const tabId of idleIds) {
+      const tab = await safeGetTab(tabId);
+      if (!tab) continue;
+      // 只刷新已经存在的 Facebook 工作标签页；绝不改写 URL。
+      if (!SecurityUtil.isFacebookTabUrl(tab.url)) continue;
+      try {
+        await chrome.tabs.reload(tabId, { bypassCache: false });
+        refreshed.push(tabId);
+      } catch (e) { /* ignore */ }
+    }
+
+    if (!refreshed.length) {
+      await StorageUtil.saveSettings({
+        pendingPeriodicRefresh: true,
+        statusMessage: `⏳ ${intervalMinutes} 分钟刷新已到点，但工作页当前无法刷新；稍后会自动补刷。`
+      });
+      return { status: 'NOTHING_REFRESHED' };
+    }
+
+    const refreshedAt = Date.now();
+    await StorageUtil.saveSettings({
+      pendingPeriodicRefresh: false,
+      lastPeriodicRefreshAt: refreshedAt,
+      nextPeriodicRefreshAt: refreshedAt + intervalMinutes * 60 * 1000,
+      statusMessage: `🔄 ${intervalMinutes} 分钟刷新周期到达：工作页已刷新。`
+    });
+    await startPeriodicRefreshAlarm();
+    return { status: 'REFRESHED', count: refreshed.length };
+  } finally {
+    refreshInFlight = false;
+  }
 }
 
 async function triggerEmergencyBrake(reason) {
@@ -886,6 +993,8 @@ async function triggerEmergencyBrake(reason) {
     isRunning: false,
     isPaused: false,
     emergencyBrakeReason: alertMsg,
+    pendingPeriodicRefresh: false,
+    nextPeriodicRefreshAt: 0,
     statusMessage: '🚨 触发紧急熔断保护，任务已停止！'
   });
   await closeAllWorkerTabs();

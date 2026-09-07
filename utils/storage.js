@@ -23,6 +23,7 @@ const DEFAULT_SETTINGS = {
   periodicRefreshMinutes: 5, // 控制面板可调整，例如 2 / 3 / 5 分钟
   lastPeriodicRefreshAt: 0,
   nextPeriodicRefreshAt: 0,
+  pendingPeriodicRefresh: false, // 到点时若正在发私信，记下待补刷，发送结束后立刻刷新
   autoSelectFacebookComments: true,
   replyAllComments: true,
   reverseKeywordMode: true,
@@ -128,7 +129,7 @@ const SETTINGS_NUMBER_FIELDS = {
 
 const SETTINGS_BOOL_FIELDS = [
   'isRunning', 'isPaused', 'processOlderComments', 'forceAllCommentsFilter',
-  'refreshAfterSuccess', 'idleRefreshEnabled', 'periodicRefreshEnabled',
+  'refreshAfterSuccess', 'idleRefreshEnabled', 'periodicRefreshEnabled', 'pendingPeriodicRefresh',
   'autoSelectFacebookComments', 'replyAllComments', 'reverseKeywordMode',
   'emergencyBrakeEnabled', 'singleWorkerMode', 'strictSequentialSend',
   'pauseOnSendFailure', 'assumeSuccessAfterClickNoError', 'persistentWorkerMode'
@@ -272,6 +273,7 @@ const SecurityUtil = {
       out.workerHeartbeats = {};
       out.activeWorkerCount = 0;
       out.nextPeriodicRefreshAt = 0;
+      out.pendingPeriodicRefresh = false;
       out.controllerTabId = 0;
     }
     return out;

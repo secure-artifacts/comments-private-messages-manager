@@ -110,7 +110,7 @@
             </div>
             <div class="form-grid">
               <div class="notice-panel" style="margin-top:0">
-                <b>单工作页逻辑：</b>启动后自动切到“所有评论”。固定 1 个工作标签页严格串行：按时间定位评论 → 弹出 Messenger 私信框 → 发送并确认 → 记录去重 → 继续下一条。后台按你设置的刷新分钟数刷新一次，再从顶部重新检测最新评论。只处理最近7天；发送失败一次即跳过，不再重试。
+                <b>单工作页逻辑：</b>启动后自动切到“所有评论”。固定 1 个工作标签页严格串行：按时间定位评论 → 弹出 Messenger 私信框 → 发送并确认 → 记录去重 → 继续下一条。后台按你设置的刷新分钟数刷新一次，再从顶部重新检测最新评论。到点时若正在发私信，会等当前这条发完后立刻补刷。只处理最近7天；发送失败一次即跳过，不再重试。
               </div>
 
               <div class="form-group">
@@ -145,9 +145,9 @@
               <div class="form-group">
                 <label>评论页面自动刷新间隔（分钟）</label>
                 <div class="range-inputs"><input type="number" id="inputRefreshMinutes" class="form-input" min="1" max="60" value="5"><span>分钟</span></div>
-                <small class="help-text">备注：可以手动设置 2、3、5 分钟等。刷新只由后台定时器触发；发送成功、发送失败、空闲扫描、切换筛选都不会额外刷新页面。</small>
+                <small class="help-text">备注：可以手动设置 2、3、5 分钟等。刷新只由后台定时器触发；发送成功、发送失败、空闲扫描、切换筛选都不会额外刷新页面。到点时如果正在发私信，会等当前这条发完后立刻补刷，不会整轮丢掉，也不会打断发送。</small>
               </div>
-              <div class="form-group checkbox-group"><label class="checkbox-label"><input type="checkbox" id="checkPeriodicRefresh" checked><span>启用评论页面定时刷新</span></label><small class="help-text">备注：开启后仅由后台定时器按上面的分钟数刷新工作页；关闭后页面不会被插件主动定时刷新。</small></div>
+              <div class="form-group checkbox-group"><label class="checkbox-label"><input type="checkbox" id="checkPeriodicRefresh" checked><span>启用评论页面定时刷新</span></label><small class="help-text">备注：开启后仅由后台定时器按上面的分钟数刷新工作页；关闭后页面不会被插件主动定时刷新。倒计时若显示“发送后补刷”，表示到点时正在发私信，当前这条结束后会马上刷新。</small></div>
 
               <div class="form-group">
                 <label>同一用户全局冷却时间（小时）</label>
@@ -161,7 +161,7 @@
               <div class="form-group"><label>评论处理时间范围</label><div class="range-inputs"><input type="number" id="inputMaxCommentAgeDays" class="form-input" min="1" max="30" value="7"><span>天</span></div><small class="help-text">备注：默认最近 7 天。超过这个时间范围的评论不会再发送；列表按时间从新到旧处理，避免无限回溯非常久以前的留言。</small></div>
               <div class="form-group checkbox-group"><label class="checkbox-label"><input type="checkbox" id="checkProcessOlder" checked><span>没有新评论时，继续向下处理最近7天内尚未处理的旧评论</span></label><small class="help-text">备注：开启后顶部没有新任务时会继续向下滚动；关闭后只处理当前顶部可见的新评论。</small></div>
               <div class="form-group checkbox-group"><label class="checkbox-label"><input type="checkbox" id="checkAutoSelect" checked><span>工作标签页离开评论管理工具后自动返回固定入口</span></label><small class="help-text">备注：建议开启。若 Facebook 内部跳转导致离开评论管理工具，插件会提示并恢复到正确入口；不会高频刷新。</small></div>
-              <div class="notice-panel" style="margin-top:0"><b>固定规则：</b>每次页面加载自动选择“所有评论”；默认所有评论都发私信；只处理最近7天；发送成功或失败后都不刷新，直接继续下一条；发送失败不重试；只有后台按你设置的分钟周期允许刷新；命中「反向关键词」或处于用户冷却期才跳过。</div>
+              <div class="notice-panel" style="margin-top:0"><b>固定规则：</b>每次页面加载自动选择“所有评论”；默认所有评论都发私信；只处理最近7天；发送成功或失败后都不刷新，直接继续下一条；发送失败不重试；只有后台按你设置的分钟周期允许刷新（到点若正在发私信，则等发送结束立刻补刷）；命中「反向关键词」或处于用户冷却期才跳过。</div>
               <div class="form-group checkbox-group"><label class="checkbox-label"><input type="checkbox" id="checkEmergencyBrake" checked><span>检测到 Facebook 验证/限制提示时自动熔断停止</span></label><small class="help-text">备注：检测到验证码、临时限制或安全检查时立即停止任务，避免继续操作。</small></div>
             </div>
             <div class="form-actions mt-4">

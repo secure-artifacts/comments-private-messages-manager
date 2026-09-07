@@ -374,8 +374,14 @@ body {
   font-weight: 800;
   letter-spacing: 0.8px;
   color: var(--accent-cyan);
+  white-space: nowrap;
 }
 .refresh-countdown.soon { color: var(--accent-yellow); }
+.refresh-countdown.soon-text {
+  font-size: 13px;
+  letter-spacing: 0;
+  min-width: 88px;
+}
 
 
 /* v2.12.1 theme button */

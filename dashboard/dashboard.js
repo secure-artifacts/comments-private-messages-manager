@@ -528,6 +528,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       countdownEl.classList.remove('countdown-soon');
       return;
     }
+    if (settings.pendingPeriodicRefresh) {
+      countdownEl.textContent = '发送后补刷';
+      countdownEl.classList.add('countdown-soon');
+      return;
+    }
     const nextAt = Number(settings.nextPeriodicRefreshAt || 0);
     if (!nextAt) {
       countdownEl.textContent = '等待定时器';
